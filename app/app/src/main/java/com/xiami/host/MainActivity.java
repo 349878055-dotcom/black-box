@@ -111,7 +111,7 @@ public class MainActivity extends Activity {
               var txt = text(e);
               var alt = e.getAttribute ? (e.getAttribute('alt')||'') : '';
               if ((txt && txt.indexOf(t) >= 0) || (alt && alt.indexOf(t) >= 0)){
-                // 命中容器(div/span/li/td)时：优先点所在行(tr)的可点元素（12320 时间层「时段|预约」）
+                // 命中容器(div/span/li/td)时：优先点所在行(tr)的可点元素
                 var target = e;
                 var tr = e.closest ? e.closest('tr') : null;
                 if (tr){
@@ -586,7 +586,7 @@ public class MainActivity extends Activity {
         WebView w = new WebView(this);
         w.setFocusable(true);
         w.setFocusableInTouchMode(true);
-        // 点输入框强制弹键盘（12320 等页面的 input 点击也能弹）
+        // 点输入框强制弹键盘（页面 input 点击也能弹）
         w.setOnTouchListener((v, ev) -> {
             if (ev.getAction() == android.view.MotionEvent.ACTION_UP) {
                 v.postDelayed(() -> {
@@ -928,8 +928,14 @@ public class MainActivity extends Activity {
                             uiWeb.setVisibility(View.GONE);
                             browserContainer.setVisibility(View.VISIBLE);
                             beginAwaitPageLoad(cbId, timeoutMs);
-                            // 对齐电脑端 pc_run：12320 老站对无 Referer 请求返回 403 → 统一带站内 Referer
-                            browserWeb.loadUrl(url, java.util.Collections.singletonMap("Referer", "https://www.nj12320.org/"));
+                            // 老站对无 Referer 请求返回 403 → 统一带站内 Referer（取当前 URL 域名）
+                            java.util.Map<String, String> hdrs = new java.util.HashMap<>();
+                            String refHost = "";
+                            try { refHost = new java.net.URI(url).getHost(); } catch (Exception ignore) {}
+                            if (refHost != null && !refHost.isEmpty()) {
+                                hdrs.put("Referer", "https://" + refHost + "/");
+                            }
+                            browserWeb.loadUrl(url, hdrs);
                             break;
                         }
                         case "check_ready": {

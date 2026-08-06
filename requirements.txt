@@ -8,6 +8,8 @@ httpx>=0.25.0
 sse-starlette>=1.8.0
 python-multipart>=0.0.9
 Pillow
-# 12320 验证码自动识别（login_auto 用；本地 OCR，离线）
-# 安装：pip install --user --break-system-packages ddddocr
-ddddocr>=1.4.7
+
+# ── 向量检索（retrieval/：小纸条机制，本地 BGE 中文向量，零网络）──
+# 安装：pip install --user --break-system-packages sentence-transformers
+# 模型：cloud/models/bge-small-zh-v1.5（已下载，离线可用）
+sentence-transformers

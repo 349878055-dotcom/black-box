@@ -92,15 +92,18 @@ class MasterAgent:
             self._busy.discard(device_id)
 
     def _make_ask(self, device_id: str):
-        async def ask(question: str) -> str:
+        async def ask(question: str, image: str | None = None) -> str:
             ts = self._tasks.get(device_id)
             if ts:
                 ts.status = "waiting_user"
                 ts.ask = {"question": str(question)}
                 ts.summary = "等待你回复…"
-            # 推送到 App 聊天
+            # 推送到 App 聊天（image 为验证码图片 base64，App 显示给用户看）
+            params: dict = {"question": str(question), "kind": "user_input"}
+            if image:
+                params["image"] = image
             try:
-                await bridge.send_cmd(device_id, "ask_user", {"question": str(question), "kind": "user_input"})
+                await bridge.send_cmd(device_id, "ask_user", params)
             except Exception:
                 pass
             ans = await bridge.wait_user_input(device_id, timeout=600)

@@ -574,7 +574,10 @@ function renderChat() {
   if (!sess || !sess.messages || !sess.messages.length) {
     inner.innerHTML = '<div class="chat-welcome"><h2>' + (sess && sess.persona ? '👤 ' + esc(sess.name) : '你好，我是虾米 🤖') + '</h2><p>' + (sess && sess.persona ? '这是独立对话窗口，专门办「' + esc(sess.name) + '」的事。' : '云端大脑帮你办事：点左上角 ☰ 打开侧边栏，去「Skill市场」挑一个「人」，加载后就是独立窗口；或直接问我。') + '</p></div>';
   } else {
-    inner.innerHTML = sess.messages.map(m => `<div class="msg ${m.who}">${esc(m.text)}</div>`).join('');
+    inner.innerHTML = sess.messages.map(m => {
+      const imgHtml = m.img ? `<div class="msg-img"><img src="data:image/png;base64,${m.img}" alt="验证码" style="max-width:220px;border-radius:8px;border:1px solid #ddd"></div>` : '';
+      return `<div class="msg ${m.who}">${esc(m.text)}${imgHtml}</div>`;
+    }).join('');
   }
   scrollChat();
 }
@@ -636,16 +639,16 @@ function doLogout() {
 }
 
 // ═══ 聊天（多窗口：appendMsg 写入当前会话并持久化）═══
-function appendMsg(who, text) {
+function appendMsg(who, text, img) {
   loadSessions();
   const sess = curSess();
   if (!sess.messages) sess.messages = [];
   // 去重：与最后一条完全相同（内容+角色）则跳过，避免轮询/历史重复堆积
   const last = sess.messages[sess.messages.length - 1];
-  if (last && last.who === who && last.text === text) return;
+  if (last && last.who === who && last.text === text && !img) return;
   // 去重：若列表中已存在完全相同的 bot 消息且时间很近（<3分钟），也跳过
-  if (who === 'bot' && sess.messages.some(m => m.who === 'bot' && m.text === text && (Date.now() - (m.at || 0)) < 180000)) return;
-  sess.messages.push({ who, text, at: Date.now() });
+  if (who === 'bot' && !img && sess.messages.some(m => m.who === 'bot' && m.text === text && (Date.now() - (m.at || 0)) < 180000)) return;
+  sess.messages.push({ who, text, img: img || null, at: Date.now() });
   sess.lastAt = Date.now();
   saveSessions();
   renderChat();
@@ -777,7 +780,13 @@ async function handleCmd(msg) {
     // 需要看页面/验证码时：提示用顶部 🌐 切浏览器、← 回聊天回复
     const q = String(params.question||'请配合（登录/验证码）');
     const needLook = /验证码|图片|截图|看.*页|在屏幕上|人工/i.test(q);
-    appendMsg('bot', '❓ ' + q + '\n（' + (needLook ? '点顶部 🌐 看页面/验证码图，再点 ← 回这里' : '请在下方输入框回复') + '后继续）');
+    const img = params.image || null;
+    if (img) {
+      // 云端推了验证码图片 → 直接显示在聊天里，用户看图在输入框回复
+      appendMsg('bot', '❓ ' + q + '\n（请查看上方验证码图片，在下方输入框输入图片上的字符）', img);
+    } else {
+      appendMsg('bot', '❓ ' + q + '\n（' + (needLook ? '点顶部 🌐 看页面/验证码图，再点 ← 回这里' : '请在下方输入框回复') + '后继续）');
+    }
     if (needLook) showBrowserBtn();
     sendResult({ ok:true }); return;
   }
@@ -882,7 +891,7 @@ async function openSkill(id) {
 async function runSkill() {
   const s = S.curSkill; if (!s) return;
   // 个人资料中心自动带入：登录/注册/就诊人字段为空时，用已存资料补齐（不必重复输入）
-  const prof = getProfile12320();
+  const prof = getProfile();
   const PROFILE_MAP = { username:'username', password:'password', signup_email:'username', signup_password:'password',
                         patient_name:'realname', patient_idnum:'idnum', patient_phone:'homephone' };
   (s.required_fields||[]).forEach(f => {
@@ -917,10 +926,10 @@ async function doCancel() {
 }
 
 // ═══ 我的 ═══
-// ── 个人资料中心：12320 账号/就诊人信息（本地 localStorage + 云端 profile 双存）──
+// ── 个人资料中心：就诊人信息（本地 localStorage + 云端 profile 双存）──
 const PROFILE_FIELDS = [
-  ['username','12320 用户名（登录用）','text'],
-  ['password','12320 密码','password'],
+  ['username','用户名（登录用）','text'],
+  ['password','密码','password'],
   ['realname','真实姓名','text'],
   ['gender','性别（男/女）','text'],
   ['birthday','出生日期','text'],
@@ -933,29 +942,32 @@ const PROFILE_FIELDS = [
   ['linkman','紧急联系人','text'],
   ['linkmanpho','紧急联系人电话','text'],
 ];
-function getProfile12320() {
-  try { const p = JSON.parse(localStorage.getItem('xiami_profile12320')||'{}'); return (p && typeof p==='object') ? p : {}; }
-  catch (e) { return {}; }
+function getProfile() {
+  try {
+    const v = localStorage.getItem('xiami_profile') || '{}';
+    const p = JSON.parse(v);
+    return (p && typeof p==='object') ? p : {};
+  } catch (e) { return {}; }
 }
 function profileBoxHtml() {
-  const p = getProfile12320();
+  const p = getProfile();
   const rows = PROFILE_FIELDS.map(([k,label,type]) =>
     `<div class="field-row"><label>${label}</label><input id="pf_${k}" type="${type}" value="${esc(p[k]||'')}"></div>`).join('');
   return `<div class="box">
-    <h3>🗂 个人资料中心 <span class="muted" style="font-weight:400">（12320 登录/填表自动带入）</span></h3>
+    <h3>🗂 个人资料中心 <span class="muted" style="font-weight:400">（就诊人信息，挂号/填表自动带入）</span></h3>
     ${rows}
-    <button class="btn small" onclick="saveProfile12320()">💾 保存到个人资料中心</button>
-    <div class="muted" style="margin-top:6px">存于本机并同步云端；执行「登录/预约」skill 时自动带入账号密码，验证码仍由你看图输入。</div>
+    <button class="btn small" onclick="saveProfile()">💾 保存到个人资料中心</button>
+    <div class="muted" style="margin-top:6px">存于本机并同步云端；执行「挂号/登录」skill 时自动带入，验证码仍由你看图输入。</div>
   </div>`;
 }
-async function saveProfile12320() {
+async function saveProfile() {
   const p = {};
   PROFILE_FIELDS.forEach(([k]) => { const el = $('pf_'+k); if (el) p[k] = el.value.trim(); });
-  localStorage.setItem('xiami_profile12320', JSON.stringify(p));
+  localStorage.setItem('xiami_profile', JSON.stringify(p));
   // 同步云端（备份 + 供主代理自动登录）
   try { await api('/api/v1/me', { method:'PUT', body: JSON.stringify({ profile: p }) }); }
   catch (e) { /* 云端同步失败不阻断本地保存 */ }
-  appendMsg('bot', '✅ 已保存到个人资料中心（12320 账号：' + (p.username||'未填') + '）');
+  appendMsg('bot', '✅ 已保存到个人资料中心（' + (p.realname||p.username||'未填') + '）');
   loadMe();
 }
 async function loadMe() {
@@ -964,8 +976,8 @@ async function loadMe() {
     const r = await api('/api/v1/me');
     const u = r.user || {}, mine = r.skills || [];
     // 云端 profile 有而本地没有 → 拉回来（换机/重装恢复）
-    if (r.profile && Object.keys(r.profile).length && Object.keys(getProfile12320()).length === 0) {
-      localStorage.setItem('xiami_profile12320', JSON.stringify(r.profile));
+    if (r.profile && Object.keys(r.profile).length && Object.keys(getProfile()).length === 0) {
+      localStorage.setItem('xiami_profile', JSON.stringify(r.profile));
     }
     $('meBox').innerHTML = `
       <div class="box">
