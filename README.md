@@ -90,9 +90,9 @@ cloud/cloud_orchestrator/
 app/                 Android 手机端（对话 UI + 内置浏览器 + 导出登录态）
 ```
 
-## 登录态文件（/tmp，重启会丢，需重新获取）
+## 登录态文件（持久化于 data/sessions/，云端重启不丢）
 
 | skill | 登录态文件 | 获取方式 |
 |---|---|---|
-| glyy | `/tmp/glyy_session.json` | 手机号+短信验证码登录（glyy_api.get_graphical_captcha → send_sms → login）；验证码图片通过 WS 推送到 App 聊天窗口显示，用户看图输入 |
-| tuniu | `/tmp/tuniu_web_session.json` + `/tmp/tuniu_cookies.txt` | App「导出登录态」/ 抓包 |
+| glyy | `cloud/cloud_orchestrator/data/sessions/glyy_session.json` | 手机号+短信验证码登录（glyy_api.get_graphical_captcha → send_sms → login）；验证码图片通过 WS 推送到 App 聊天窗口显示，用户看图输入 |
+| tuniu | `cloud/cloud_orchestrator/data/sessions/tuniu_web_session.json` | App「导出登录态」/ 抓包 → `TuniuWebAPI.save_session()` 保存；重启自动加载 |

@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 
 import requests
 
@@ -275,6 +276,10 @@ class TuniuWebAPI:
           "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781")
     REFERER = "https://servicewechat.com/wx340329c7ee375a33/523/page-frame.html"
 
+    _HERE = os.path.dirname(os.path.abspath(__file__))
+    _SESS_DIR = os.path.normpath(os.path.join(_HERE, "..", "..", "..", "cloud", "cloud_orchestrator", "data", "sessions"))
+    SESSION_FILE = os.path.join(_SESS_DIR, "tuniu_web_session.json")
+
     def __init__(self, cookies: str | dict | None = None, session_id: str = "") -> None:
         self.cookies: dict[str, str] = {}
         if isinstance(cookies, str):
@@ -287,6 +292,45 @@ class TuniuWebAPI:
             self.cookies = cookies
         self.session_id = session_id
         self.token = ""
+        # 未传登录态 → 从持久化目录加载（重启不丢）
+        if not self.cookies and not self.session_id:
+            self._load_session()
+
+    # ─────────── 登录态持久化（data/sessions/，云端重启不丢）───────────
+    def _load_session(self) -> None:
+        try:
+            if os.path.exists(self.SESSION_FILE):
+                with open(self.SESSION_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                self.cookies = dict(data.get("cookies") or {})
+                self.session_id = str(data.get("session_id") or "")
+        except Exception as e:
+            logger.warning("途牛登录态加载失败: %s", e)
+
+    def save_session(self, cookies=None, session_id: str = "") -> str:
+        """保存途牛登录态（App 导出/抓包后调用），返回保存路径。"""
+        try:
+            if cookies is not None:
+                if isinstance(cookies, str):
+                    self.cookies = {}
+                    for it in cookies.split(";"):
+                        it = it.strip()
+                        if "=" in it:
+                            k, v = it.split("=", 1)
+                            self.cookies[k.strip()] = v.strip()
+                elif isinstance(cookies, dict):
+                    self.cookies = cookies
+            if session_id:
+                self.session_id = session_id
+            os.makedirs(self._SESS_DIR, exist_ok=True)
+            with open(self.SESSION_FILE, "w", encoding="utf-8") as f:
+                json.dump({"cookies": self.cookies, "session_id": self.session_id},
+                          f, ensure_ascii=False, indent=2)
+            logger.info("途牛登录态已保存 → %s", self.SESSION_FILE)
+            return self.SESSION_FILE
+        except Exception as e:
+            logger.warning("途牛登录态保存失败: %s", e)
+            return ""
 
     def _post(self, base: str, path: str, body: dict, use_session: bool = False) -> dict:
         h = {"User-Agent": self.UA, "Content-Type": "application/json",

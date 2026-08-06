@@ -458,7 +458,20 @@ function loadSessions() {
   if (!S.activeSessId || !S.sessions[S.activeSessId]) S.activeSessId = 'default';
 }
 function saveSessions() {
-  try { localStorage.setItem('xiami_sessions', JSON.stringify(S.sessions)); } catch (e) {}
+  try {
+    // 图片消息（验证码 base64）不持久化：保存时剥掉 img 字段，避免撑爆 localStorage
+    const snap = {};
+    Object.keys(S.sessions).forEach(sid => {
+      const s = S.sessions[sid];
+      snap[sid] = Object.assign({}, s, {
+        messages: (s.messages || []).map(m => {
+          if (m.img) return Object.assign({}, m, { img: null });
+          return m;
+        }),
+      });
+    });
+    localStorage.setItem('xiami_sessions', JSON.stringify(snap));
+  } catch (e) {}
 }
 function curSess() {
   loadSessions();

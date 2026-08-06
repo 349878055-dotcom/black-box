@@ -73,7 +73,11 @@ ROLE = "patient"
 UA_WX = ("Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 "
          "(KHTML, like Gecko) Mobile/15E148 MicroMessenger/8.0.38(0x18002623) "
          "NetType/WIFI Language/zh_CN")
-SESSION_FILE = "/tmp/glyy_session.json"
+# 登录态持久化目录（不在 /tmp，云端重启不丢）
+_HERE_DIR = os.path.dirname(os.path.abspath(__file__))
+_SESS_DIR = os.path.normpath(os.path.join(_HERE_DIR, "..", "..", "..", "cloud", "cloud_orchestrator", "data", "sessions"))
+os.makedirs(_SESS_DIR, exist_ok=True)
+SESSION_FILE = os.path.join(_SESS_DIR, "glyy_session.json")
 REFERER = "https://servicewechat.com/wx74a991a2ae77468d/330/page-frame.html"
 
 # 认证（来自原 glyy_session.py，已合并）
@@ -120,7 +124,7 @@ def sign_headers(basic: str = BASIC_SMS, extra: dict | None = None) -> dict:
 
 
 def load_token() -> str:
-    """从 /tmp/glyy_session.json 加载 access_token。"""
+    """从 data/sessions/glyy_session.json 加载 access_token（持久化，重启不丢）。"""
     if os.path.exists(SESSION_FILE):
         with open(SESSION_FILE, "r", encoding="utf-8") as f:
             return (json.load(f).get("access_token") or "").strip()
