@@ -201,35 +201,6 @@
       </div>
     </div>
 
-    <!-- 创建我的Skill（制作台：制作 AI + 测试 AI） -->
-    <div class="view" id="createView">
-      <div class="panel">
-        <div class="create-box">
-          <div class="big">🛠</div>
-          <h2>Skill 制作台</h2>
-          <div class="muted">用自然语言描述，云端帮你做成可执行的 Skill</div>
-        </div>
-        <div class="box">
-          <h3>1️⃣ 描述你要做什么</h3>
-          <div class="field-row"><label>目标网站（可选）</label><input id="mkSite" placeholder="如 闲鱼 / 淘宝 / 12306"></div>
-          <div class="field-row"><label>Skill 名称（可选）</label><input id="mkName" placeholder="如 闲鱼上架"></div>
-          <div class="field-row"><label>描述你要做的事</label><textarea id="mkDesc" rows="3" placeholder="例如：在闲鱼上架一件商品，传图、填标题、填价格、选包邮、点发布"></textarea></div>
-          <button class="btn" id="mkCreateBtn" onclick="skillMakeCreate()">生成流程（制作 AI）</button>
-        </div>
-        <div class="box" id="mkDraftBox" style="display:none">
-          <h3>2️⃣ 草稿流程</h3>
-          <div class="muted" id="mkDraftSteps" style="margin-top:6px"></div>
-          <button class="btn" id="mkTestBtn" onclick="skillMakeTest()">真机测试（测试 AI）→ 变硬编码</button>
-        </div>
-        <div class="box" id="mkResultBox" style="display:none">
-          <h3>3️⃣ 结果</h3>
-          <div class="statusline" id="mkStatus"></div>
-          <div class="muted" id="mkResult" style="margin-top:6px"></div>
-          <button class="btn" id="mkPublishBtn" onclick="skillMakePublish()" style="display:none">发布到市场</button>
-        </div>
-      </div>
-    </div>
-
     <!-- 设置（DeepSeek/Gemini 式：底部入口） -->
     <div class="view" id="settingsView">
       <div class="panel">
@@ -244,7 +215,7 @@
           <button class="btn ghost" onclick="alert('虾米 · 云端大脑 + 手机执行\n版本 1.0')">ℹ️ 关于</button>
           <button class="btn danger" id="setLogout" onclick="doLogout()" style="display:none">↩ 退出登录</button>
         </div>
-        <div class="muted" style="text-align:center;padding:10px">Skill 制作台、人格化 Skill 的设计规范见项目文档</div>
+        <div class="muted" style="text-align:center;padding:10px">虾米 · 云端大脑 + 手机执行</div>
       </div>
     </div>
 
@@ -339,8 +310,8 @@ function getBase() {
 }
 
 // ═══ 视图切换（左侧栏）═══
-const TITLES = { chat:'对话', market:'Skill市场', create:'创建我的Skill', me:'我的', browser:'浏览器', settings:'设置' };
-const VIEWS = { chat:'chatView', market:'marketView', create:'createView', me:'meView', browser:'browserView', settings:'settingsView' };
+const TITLES = { chat:'对话', market:'Skill市场', me:'我的', browser:'浏览器', settings:'设置' };
+const VIEWS = { chat:'chatView', market:'marketView', me:'meView', browser:'browserView', settings:'settingsView' };
 function showView(name) {
   S.view = name;
   Object.keys(VIEWS).forEach(v => $(VIEWS[v]).classList.toggle('active', v === name));
@@ -348,7 +319,6 @@ function showView(name) {
   $('backBtn').style.display = (name === 'chat') ? 'none' : 'block';
   $('viewTitle').textContent = TITLES[name] || '对话';
   if (name === 'market') loadMarket();
-  if (name === 'create') renderCreate();
   if (name === 'me') loadMe();
   if (name === 'settings') renderSettings();
   if (name === 'chat') renderConvList();
@@ -380,75 +350,6 @@ async function exportCookies() {
     }
   } catch (e) { alert('⚠️ 导出失败：' + e.message); }
 }
-function renderCreate() {
-  // 进入制作台时重置状态（避免残留上次草稿）
-  if (!S.mkDraft) { $('mkDraftBox').style.display = 'none'; $('mkResultBox').style.display = 'none'; }
-}
-// ═══ Skill 制作台：制作 AI（生成流程）═══
-let S_mkDraft = null, S_mkSkill = null;
-async function skillMakeCreate() {
-  const desc = $('mkDesc').value.trim();
-  if (!desc) { alert('请先描述你要做什么'); return; }
-  if (!S.token) { alert('请先登录'); return; }
-  $('mkCreateBtn').disabled = true; $('mkCreateBtn').textContent = '生成中…';
-  try {
-    const r = await api('/api/v1/skillmaker/create', { method:'POST', body: JSON.stringify({
-      description: desc, site: $('mkSite').value.trim(), name: $('mkName').value.trim()
-    })});
-    if (!r.ok) throw new Error(r.detail || '制作失败');
-    S_mkDraft = r.draft;
-    const steps = (r.draft.steps || []).map((s,i) => `${i+1}. ${s.type}${s.keyword ? '「'+s.keyword+'」' : ''}${s.field ? ' '+s.field : ''}`).join('\n');
-    $('mkDraftSteps').textContent = '草稿 steps：\n' + steps + '\n\n表格字段：' + (r.draft.required_fields||[]).map(f=>f.label).join('、');
-    $('mkDraftBox').style.display = 'block';
-    $('mkResultBox').style.display = 'none';
-    $('mkStatus').textContent = '';
-    $('mkResult').textContent = '';
-    $('mkPublishBtn').style.display = 'none';
-  } catch (e) { alert('❌ ' + e.message); }
-  finally { $('mkCreateBtn').disabled = false; $('mkCreateBtn').textContent = '生成流程（制作 AI）'; }
-}
-// ═══ Skill 制作台：测试 AI（真机跑 → 硬编码）═══
-async function skillMakeTest() {
-  if (!S_mkDraft) { alert('请先生成流程'); return; }
-  if (!S.token) { alert('请先登录'); return; }
-  $('mkTestBtn').disabled = true; $('mkTestBtn').textContent = '真机测试中…（手机浏览器在跑）';
-  $('mkResultBox').style.display = 'block';
-  $('mkStatus').textContent = '测试开始：打开页面 → 逐步骤跑 → 蒸馏控件定定位…';
-  try {
-    const r = await api('/api/v1/skillmaker/test', { method:'POST', body: JSON.stringify({ draft: S_mkDraft, device_id: S.deviceId })});
-    if (r.ok) {
-      S_mkSkill = r.skill;
-      $('mkStatus').textContent = '✅ 测试通过，skill 已硬编码可执行';
-      const iface = (r.interface || {});
-      $('mkResult').textContent = 'interface 定位：\n' + Object.entries(iface).map(([k,v])=>`${k}: ${v.by} = ${v.value || v.index}`).join('\n');
-      $('mkPublishBtn').style.display = 'block';
-    } else {
-      $('mkStatus').textContent = '❌ ' + (r.reason || r.error || '测试失败');
-      $('mkResult').textContent = '进度：\n' + (r.progress || []).join('\n');
-    }
-  } catch (e) { $('mkStatus').textContent = '❌ ' + e.message; }
-  finally { $('mkTestBtn').disabled = false; $('mkTestBtn').textContent = '真机测试（测试 AI）→ 变硬编码'; }
-}
-// ═══ Skill 制作台：发布到市场 ═══
-async function skillMakePublish() {
-  if (!S_mkSkill) { alert('请先测试通过'); return; }
-  $('mkPublishBtn').disabled = true;
-  try {
-    const r = await api('/api/v1/skills', { method:'POST', body: JSON.stringify({
-      skill_id: S_mkSkill.id, name: S_mkSkill.name, site: S_mkSkill.site || '',
-      driver: S_mkSkill.driver || 'web', description: S_mkSkill.description || '',
-      intro: S_mkSkill.description || '', tags: [], visibility: 'public', status: 'verified',
-      steps: S_mkSkill.steps || [], required_fields: S_mkSkill.required_fields || []
-    })});
-    if (r.ok) {
-      $('mkStatus').textContent = '✅ 已发布到市场！去 Skill市场 看看';
-      $('mkPublishBtn').style.display = 'none';
-      loadMarket();
-    } else { $('mkStatus').textContent = '❌ ' + (r.detail || '发布失败'); }
-  } catch (e) { $('mkStatus').textContent = '❌ ' + e.message; }
-  finally { $('mkPublishBtn').disabled = false; }
-}
-
 // ═══ 会话状态机（一个 Skill = 一个独立窗口）═══
 function loadSessions() {
   try { S.sessions = JSON.parse(localStorage.getItem('xiami_sessions') || '{}'); }
@@ -1002,9 +903,8 @@ async function loadMe() {
         <button class="btn small" onclick="saveMe()">保存资料</button>
       </div>
       ${profileBoxHtml()}
-      <button class="btn ghost" onclick="navTo('create')">🛠 创建我的Skill（制作台）</button>
       <div class="box"><h3>我的 skill（${mine.length}）</h3>
-        ${mine.length ? mine.map(s=>`<div style="padding:5px 0">${esc(s.name)} ${skillBadge(s)}</div>`).join('') : '<div class="muted">暂无（制作台是下一步）</div>'}
+        ${mine.length ? mine.map(s=>`<div style="padding:5px 0">${esc(s.name)} ${skillBadge(s)}</div>`).join('') : '<div class="muted">暂无已接入的 skill</div>'}
       </div>`;
   } catch (e) { $('meBox').innerHTML = '<div class="empty"><b>加载失败</b>' + esc(e.message) + '</div>'; }
 }

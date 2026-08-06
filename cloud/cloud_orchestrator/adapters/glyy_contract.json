@@ -1,0 +1,319 @@
+{
+  "id": "glyy",
+  "name": "南京鼓楼医院互联网医院",
+  "site": "南京鼓楼医院（微信小程序「南京鼓楼医院互联网医院」appid wx74a991a2ae77468d）",
+  "base": "https://www.ih.njglyy.com:9532/caring/api",
+  "intent": "挂号预约：查科室/医生/排班/时段 → 提交预约 → 查订单/取消",
+  "auth": {
+    "required": true,
+    "kind": "token",
+    "how_to_get": "① 形式：Bearer token（access_token）。② 从哪来：云端 API 短信登录（POST /v4/session/phone，3 步：抓图形验证码 → 发短信 → 登录），无需内置浏览器/抓包。③ 要不要人配合：要——人看图输图形验证码 + 看手机输短信验证码；成功后 token 存 data/sessions/glyy_session.json 持久化，重启不丢。",
+    "how": "手机号+短信验证码登录（POST /v4/session/phone，Basic hospital:hospital-secret）；或抓包注入真实 token。请求带 Authorization: Bearer <access_token>；过期用 PUT /session?refresh_token=xxx 刷新。",
+    "sign": "所有请求必须带签名头：appKey=1340patient、timestamp(毫秒)、nonce(随机)、sign=SHA1(MD5(appKey+timestamp+nonce))；UA 必须用微信手机 UA，否则服务器挂起",
+    "login_site": "图形验证码: POST /sms/captcha?phone=；发短信: POST /sms?phone=&type=1&code=<图形验证码>（Basic sms:smssecret）"
+  },
+  "endpoints": [
+    {
+      "name": "登录(手机验证码)",
+      "method": "POST",
+      "path": "/v4/session/phone",
+      "params": {
+        "phone": "{phone}"
+      },
+      "body": {
+        "phone": "{phone}",
+        "code": "{sms_code}"
+      },
+      "headers": {
+        "Authorization": "Basic aG9zcGl0YWw6aG9zcGl0YWwtc2VjcmV0"
+      },
+      "content_type": "json",
+      "need_login": false,
+      "method_name": "login",
+      "desc": "手机号+短信验证码登录 → {access_token, refresh_token, ...}",
+      "success": "code=0",
+      "note": "query 和 body 都要带 phone/code",
+      "keywords": [
+        "登录(手机验证码)"
+      ],
+      "examples": [
+        "登录(手机验证码)"
+      ]
+    },
+    {
+      "name": "查科室",
+      "method": "GET",
+      "path": "/public/dept",
+      "params": {},
+      "need_login": false,
+      "method_name": "list_depts",
+      "desc": "科室列表（533个）→ [{dept_code, dept_name, branch_code}]",
+      "success": "code=0",
+      "keywords": [
+        "科室",
+        "医院科室",
+        "有哪些科"
+      ],
+      "examples": [
+        "鼓楼医院有哪些科室",
+        "看皮肤科挂哪个科"
+      ]
+    },
+    {
+      "name": "查科室医生",
+      "method": "GET",
+      "path": "/public/schedule/dept/doctor/{dept_code}",
+      "params": {},
+      "need_login": false,
+      "method_name": "list_doctors",
+      "desc": "科室医生 → [{doctor_code, doctor_name, title, intro}]",
+      "success": "code=0",
+      "keywords": [
+        "医生",
+        "专家",
+        "大夫"
+      ],
+      "examples": [
+        "皮肤科有哪些医生",
+        "看专家号"
+      ]
+    },
+    {
+      "name": "可约日期",
+      "method": "GET",
+      "path": "/public/v3/schedule/dept/{dept_code}/check",
+      "params": {
+        "begin_date": "YYYY-MM-DD",
+        "end_date": "YYYY-MM-DD",
+        "branch_code": "1",
+        "business_type": "1|2",
+        "res_src": "801"
+      },
+      "need_login": false,
+      "method_name": "get_available_dates",
+      "desc": "可预约日期列表（business_type 1=普通号 2=专家号）",
+      "success": "code=0",
+      "keywords": [
+        "可约日期",
+        "哪天能约",
+        "放号"
+      ],
+      "examples": [
+        "这周哪天能约",
+        "什么时候放号"
+      ]
+    },
+    {
+      "name": "查排班(含时段)",
+      "method": "GET",
+      "path": "/public/v3/schedule/dept/{dept_code}",
+      "params": {
+        "begin_date": "YYYY-MM-DD",
+        "end_date": "YYYY-MM-DD",
+        "schedule_type": "1|2",
+        "type": "0|1",
+        "branch_code": "1",
+        "need_detail": "true",
+        "business_type": "1|2",
+        "res_src": "801"
+      },
+      "need_login": false,
+      "method_name": "get_schedule",
+      "desc": "排班 → {normal:[...], expert:[...]}，每条含 schedule_id/reg_fee/noon_code/doctor + detail(时段数组: time_part/schedule_num_id/remaining_num/is_enable)",
+      "success": "code=0",
+      "note": "is_enable=1 表示该时段可约；挂号时从 detail 取 schedule_num_id",
+      "keywords": [
+        "排班",
+        "出诊时间",
+        "哪天有号"
+      ],
+      "examples": [
+        "张医生这周出诊吗",
+        "明天有号吗"
+      ]
+    },
+    {
+      "name": "患者信息",
+      "method": "GET",
+      "path": "/public/patient/identity",
+      "params": {},
+      "need_login": true,
+      "method_name": "get_patient",
+      "desc": "患者信息 → {patient_codes, name, id_card(脱敏), phone}；另 /user/patient/all 返回完整列表",
+      "success": "code=0",
+      "keywords": [
+        "我的信息",
+        "就诊人",
+        "患者"
+      ],
+      "examples": [
+        "我的就诊人信息",
+        "添加就诊人"
+      ]
+    },
+    {
+      "name": "提交挂号",
+      "method": "POST",
+      "path": "/public/v3/register",
+      "params": {},
+      "body": {
+        "appointment_time": "YYYY-MM-DD",
+        "cost": "分",
+        "dept_code": "",
+        "dept_name": "",
+        "doctor_code": "",
+        "doctor_name": "",
+        "id_card": "",
+        "mcard_no": "",
+        "noon_code": "上午",
+        "patient_code": "",
+        "patient_name": "",
+        "pay_channel": "offline",
+        "source": "wx_tinyapp",
+        "open_id": "",
+        "front_url": "",
+        "re_clinic_id": 0,
+        "reg_type": "0|1",
+        "reg_name": "",
+        "register_level_name": "",
+        "schedule_id": "",
+        "schedule_num_id": "",
+        "res_title_code": "",
+        "res_title_name": "",
+        "business_type": 1,
+        "start_hour": "",
+        "type": 0,
+        "oc_token": "",
+        "pay_auth_no": "",
+        "insu_type": "",
+        "res_src": 801
+      },
+      "content_type": "json",
+      "need_login": true,
+      "method_name": "register",
+      "desc": "提交预约（⚠️真挂号有副作用，须用户确认）",
+      "success": "code=0 或 1",
+      "fail": "code=30300 退约次数上限；时段满时 detail.is_enable=0",
+      "note": "字段全部来自排班响应+时段 detail+患者信息；id_card 实名值可从抓包/实名绑定",
+      "keywords": [
+        "挂号",
+        "预约",
+        "提交"
+      ],
+      "examples": [
+        "帮我挂号",
+        "预约皮肤科"
+      ]
+    },
+    {
+      "name": "我的订单",
+      "method": "GET",
+      "path": "/public/orders",
+      "params": {
+        "page": "0",
+        "size": "10",
+        "start_time": "",
+        "end_time": "",
+        "type": ""
+      },
+      "need_login": true,
+      "method_name": "list_orders",
+      "desc": "预约/订单列表 → [{id, order_no, state, create_time}]",
+      "success": "code=0",
+      "keywords": [
+        "我的订单",
+        "预约记录",
+        "查订单"
+      ],
+      "examples": [
+        "我挂的号有哪些",
+        "我的预约记录"
+      ]
+    },
+    {
+      "name": "取消预约",
+      "method": "POST",
+      "path": "/public/v3/reservation/cancel",
+      "params": {
+        "schedule_id": ""
+      },
+      "need_login": true,
+      "method_name": "cancel_reservation",
+      "desc": "取消预约（⚠️7天内退约次数有限制）",
+      "success": "code=0",
+      "keywords": [
+        "取消预约"
+      ],
+      "examples": [
+        "取消预约"
+      ]
+    },
+    {
+      "name": "查报告",
+      "method": "GET",
+      "path": "/public/report/{kind}",
+      "params": {
+        "start_date": "YYYY-MM-DD",
+        "end_date": "YYYY-MM-DD"
+      },
+      "need_login": true,
+      "method_name": "list_reports",
+      "desc": "查报告（kind=check检查/examine检验，需日期范围；无数据返回[]）",
+      "success": "code=0",
+      "keywords": [
+        "检查报告",
+        "检验报告",
+        "报告"
+      ],
+      "examples": [
+        "我的检查报告",
+        "查检验报告"
+      ]
+    },
+    {
+      "name": "门诊待缴费",
+      "method": "GET",
+      "path": "/public/clinic/no_paid",
+      "params": {},
+      "need_login": true,
+      "method_name": "clinic_no_paid",
+      "desc": "门诊待缴费列表",
+      "success": "code=0",
+      "keywords": [
+        "待缴费",
+        "未缴费",
+        "缴费"
+      ],
+      "examples": [
+        "我有待缴费的吗",
+        "门诊费用"
+      ]
+    },
+    {
+      "name": "就诊记录",
+      "method": "POST",
+      "path": "/public/visit/record",
+      "params": {},
+      "need_login": true,
+      "method_name": "visit_records",
+      "desc": "就诊记录（POST）",
+      "success": "code=0",
+      "keywords": [
+        "就诊记录",
+        "病历",
+        "看过什么病"
+      ],
+      "examples": [
+        "我的就诊记录",
+        "历史病历"
+      ]
+    }
+  ],
+  "human_touch": [
+    "登录：图形验证码/短信验证码由用户配合输入"
+  ],
+  "not_deliver": [
+    "点哪个按钮、等哪个 DOM——那些不稳定，不算交付物"
+  ],
+  "category": "医疗"
+}

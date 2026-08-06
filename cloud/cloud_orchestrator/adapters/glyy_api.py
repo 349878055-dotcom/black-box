@@ -11,46 +11,18 @@
   UA  : 必须用微信手机 UA，否则服务器挂起
 
 登录态：
-  - 抓包拿到的真实 token 存于 /tmp/glyy_session.json（load_token()）
-  - 或调用登录流程：get_graphical_captcha → send_sms → login（图形验证码+短信真人配合）
+  - 抓包拿到的真实 token 存于 /tmp/glyy_session.json（get_token()）
+  - 或调用登录流程（见 glyy_session.py）生成新 token
 
-【GlyyAPI 全部 26 个方法】：
-
-一、挂号全链路（查科室 → 医生 → 日期 → 排班 → 患者 → 提交 → 订单）
-  api.list_depts()                    → 科室列表 [{dept_code, dept_name, branch_code}]（533 个）
-  api.list_doctors(dept_code)         → 科室医生 [{doctor_code, doctor_name, title, intro}]
-  api.get_available_dates(dept_code)  → 可预约日期列表
-  api.get_schedule(dept_code, date)   → 排班 {normal, expert}（含 schedule_id + detail 时段）
-  api.get_patient()                   → 患者信息 {name, id_card(可能脱敏), phone}
-  api.register(...)                   → 提交挂号（⚠️ 真挂号！谨慎调用）
-  api.book(...)                       → 一键挂号（自动查排班选时段提交）
-  api.list_orders()                   → 我的预约/订单列表
-  api.cancel_reservation(...)         → 取消预约（⚠️7天退约次数限制）
-
-二、登录（验证码真人配合）
-  api.get_graphical_captcha(phone)    → 步骤1：抓图形验证码 → /tmp/glyy_captcha.png
-  api.send_sms(phone, gcode)          → 步骤2：发短信验证码
-  api.login(phone, code)              → 步骤3：手机号+短信验证码登录 → 保存 token
-
-三、报告 / 缴费 / 处方 / 病历
-  api.list_reports(start, end, kind)  → 查报告（check 检查 / examine 检验）
-  api.clinic_no_paid()                → 门诊待缴费列表
-  api.clinic_no_paid_detail(reg_id)   → 门诊待缴费详情
-  api.visit_records()                 → 就诊记录
-  api.get_recipe(visit_id)            → 按就诊查处方列表
-  api.get_recipe_detail(recipe_id)    → 处方详情（药品清单）
-  api.visit_patient_record(visit_id)  → 就诊病历记录
-
-四、复诊 / 支付
-  api.re_clinic_schedule(doctor_code) → 复诊排班
-  api.medical_pay()                   → 医疗支付信息
-
-五、在线咨询 / 互联网医院
-  api.online_depts()                  → 互联网科室列表
-  api.expert_cloud_depts()            → 专家云诊室科室+时段
-  api.online_search(key)              → 在线搜索（医生/科室）
-  api.judge_revisit(id_card)          → 复诊判断
-  api.online_doctor_schedule(doctor)  → 在线医生排班
+挂号流程：
+  api.list_depts()                     → 科室列表 [{dept_code, dept_name, branch_code}]
+  api.list_doctors(dept_code)          → 医生列表（专家号科室）
+  api.get_available_dates(dept_code)   → 可约日期列表
+  api.get_schedule(dept_code, date)    → 排班 {normal:[...], expert:[...]}（含 detail 时段）
+  api.get_patient()                    → 患者信息（id_card/patient_name）
+  api.register(...)                    → 提交挂号（⚠️ 真挂号！谨慎调用）
+  api.list_orders()                    → 我的预约订单
+  api.cancel_reservation(...)          → 取消预约
 """
 from __future__ import annotations
 
@@ -73,16 +45,8 @@ ROLE = "patient"
 UA_WX = ("Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 "
          "(KHTML, like Gecko) Mobile/15E148 MicroMessenger/8.0.38(0x18002623) "
          "NetType/WIFI Language/zh_CN")
-# 登录态持久化目录（不在 /tmp，云端重启不丢）
-_HERE_DIR = os.path.dirname(os.path.abspath(__file__))
-_SESS_DIR = os.path.normpath(os.path.join(_HERE_DIR, "..", "..", "..", "cloud", "cloud_orchestrator", "data", "sessions"))
-os.makedirs(_SESS_DIR, exist_ok=True)
-SESSION_FILE = os.path.join(_SESS_DIR, "glyy_session.json")
+SESSION_FILE = "/tmp/glyy_session.json"
 REFERER = "https://servicewechat.com/wx74a991a2ae77468d/330/page-frame.html"
-
-# 认证（来自原 glyy_session.py，已合并）
-BASIC_SMS = "Basic c21zOnNtc3NlY3JldA=="          # sms:smssecret（发短信/验证码用）
-BASIC_HOSPITAL = "Basic aG9zcGl0YWw6aG9zcGl0YWwtc2VjcmV0"  # hospital:hospital-secret（公开接口）
 
 # 挂号固定参数（抓包实测）
 RES_SRC = 801          # 来源
@@ -100,31 +64,8 @@ def _sign(app_key: str, timestamp: str, nonce: str) -> str:
     return hashlib.sha1(md5hex.encode()).hexdigest()
 
 
-def sign_headers(basic: str = BASIC_SMS, extra: dict | None = None) -> dict:
-    """生成带签名的请求头（对齐小程序 caringRequest）。"""
-    timestamp = str(int(time.time() * 1000))
-    nonce = _nonce()
-    h = {
-        "User-Agent": UA_WX,
-        "Authorization": basic,
-        "appKey": APP_KEY,
-        "role": ROLE,
-        "tenant": TENANT,
-        "timestamp": timestamp,
-        "nonce": nonce,
-        "sign": _sign(APP_KEY, timestamp, nonce),
-        "Content-Type": "application/json",
-        "Accept": "*/*",
-        "Referer": REFERER,
-        "Accept-Language": "zh-CN,zh;q=0.9",
-    }
-    if extra:
-        h.update(extra)
-    return h
-
-
 def load_token() -> str:
-    """从 data/sessions/glyy_session.json 加载 access_token（持久化，重启不丢）。"""
+    """从 /tmp/glyy_session.json 加载 access_token。"""
     if os.path.exists(SESSION_FILE):
         with open(SESSION_FILE, "r", encoding="utf-8") as f:
             return (json.load(f).get("access_token") or "").strip()
@@ -138,23 +79,22 @@ class GlyyAPI:
 
     # ─────────── 登录（验证码真人配合）───────────
     def get_graphical_captcha(self, phone: str) -> dict:
-        """步骤1：POST /sms/captcha?phone= → 图形验证码，返回 base64 图片（推到 App 显示给用户看）。"""
+        """步骤1：POST /sms/captcha?phone= → 图形验证码 base64，存 /tmp/glyy_captcha.png 给人看。"""
         import base64
+        from glyy_session import BASIC_SMS, sign_headers
         r = requests.post(BASE + "/sms/captcha", params={"phone": phone},
                           headers=sign_headers(BASIC_SMS), timeout=20, verify=False)
         j = self._parse(r)
         data = (j.get("data") or "")
         if j.get("code") == 0 and isinstance(data, str) and data.startswith("data:image"):
-            b64 = data.split(",", 1)[1]
             with open("/tmp/glyy_captcha.png", "wb") as f:
-                f.write(base64.b64decode(b64))
-            return {"ok": True, "captcha_file": "/tmp/glyy_captcha.png",
-                    "image_base64": b64,   # 交给 agent → ask_user 推送 App 显示
-                    "hint": "请把验证码图片发给用户看，让用户输入图片上的字符"}
+                f.write(base64.b64decode(data.split(",", 1)[1]))
+            return {"ok": True, "captcha_file": "/tmp/glyy_captcha.png"}
         return {"ok": False, "error": j.get("message") or j.get("dev_message")}
 
     def send_sms(self, phone: str, gcode: str) -> dict:
         """步骤2：POST /sms?phone=&type=1&code=<图形验证码> → 给手机发短信验证码。"""
+        from glyy_session import BASIC_SMS, sign_headers
         r = requests.post(BASE + "/sms", params={"phone": phone, "type": "1", "code": gcode},
                           headers=sign_headers(BASIC_SMS), timeout=20, verify=False)
         j = self._parse(r)
@@ -163,11 +103,12 @@ class GlyyAPI:
 
     def login(self, phone: str, code: str) -> dict:
         """步骤3：POST /v4/session/phone?phone=&code=<短信验证码> + JSON body（Basic hospital）→ 设 token。"""
-        ts = str(int(time.time() * 1000)); nc = _nonce()
+        from glyy_session import BASIC_HOSPITAL, make_nonce, make_sign
+        ts = str(int(time.time() * 1000)); nc = make_nonce()
         headers = {
             "User-Agent": UA_WX, "Authorization": BASIC_HOSPITAL,
             "appKey": APP_KEY, "role": ROLE, "tenant": TENANT,
-            "timestamp": ts, "nonce": nc, "sign": _sign(APP_KEY, ts, nc),
+            "timestamp": ts, "nonce": nc, "sign": make_sign(APP_KEY, ts, nc),
             "Content-Type": "application/json", "Accept": "*/*",
         }
         r = self.s.post(BASE + "/v4/session/phone", params={"phone": phone, "code": code},

@@ -168,3 +168,87 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str | None = None
         if session:
             session.websocket = websocket
     await handle_websocket(websocket, session_id, device_id)
+
+
+# ═══════════════════ Skill 消费 API（搜索 / 直调）═══════════════════
+# 依赖发布：tools/publish_skill.py 同步 adapters/{id}_api.py + skill_index.json
+
+import json
+import math
+import os
+
+from ..adapters import registry as _skill_registry
+
+_EMBED_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings"
+_EMBED_MODEL = "text-embedding-v3"
+_INDEX_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "adapters", "skill_index.json")
+
+
+def _qwen_key() -> str:
+    try:
+        from ..config import get
+        for k in ("qwen_api_key", "bailian_api_key", "vision_api_key"):
+            v = get(k, "")
+            if v:
+                return v
+    except Exception:
+        pass
+    return os.environ.get("QWEN_API_KEY", "")
+
+
+def _embed(text: str) -> list[float] | None:
+    import requests
+    key = _qwen_key()
+    if not key:
+        return None
+    try:
+        r = requests.post(_EMBED_URL,
+                          headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                          json={"model": _EMBED_MODEL, "input": text}, timeout=20)
+        d = r.json()
+        return d["data"][0]["embedding"]
+    except Exception:
+        return None
+
+
+def _cos(a: list, b: list) -> float:
+    return sum(x * y for x, y in zip(a, b)) / (
+        math.sqrt(sum(x * x for x in a)) * math.sqrt(sum(y * y for y in b)) + 1e-9)
+
+
+class SkillRunRequest(BaseModel):
+    method: str
+    params: dict = {}
+
+
+@router.get("/api/v1/skills")
+async def api_list_skills():
+    """skill 清单（手机 App 展示/搜索入口）。"""
+    return {"skills": _skill_registry.list_skills()}
+
+
+@router.get("/api/v1/skills/search")
+async def api_search_skills(q: str = "", k: int = 3):
+    """向量搜索 skill（用户一句话 → top-k 命中）。"""
+    if not q:
+        return {"results": []}
+    if not os.path.isfile(_INDEX_PATH):
+        return {"results": [], "note": "索引不存在，先发布（tools/publish_skill.py）"}
+    qv = _embed(q)
+    if not qv:
+        return {"results": [], "note": "embedding 不可用（需配置千问 key）"}
+    index = json.load(open(_INDEX_PATH, encoding="utf-8"))
+    scored = []
+    for sid, it in index.items():
+        s = _cos(qv, it.get("vec", []))
+        scored.append((s, sid, it.get("meta", {})))
+    scored.sort(key=lambda x: -x[0])
+    return {"results": [
+        {"skill": sid, "score": round(s, 4), "name": m.get("name"), "intent": m.get("intent")}
+        for s, sid, m in scored[:k]]}
+
+
+@router.post("/api/v1/skills/{skill_id}/run")
+async def api_run_skill(skill_id: str, body: SkillRunRequest):
+    """直接消费 skill：POST /api/v1/skills/{id}/run {method, params}。"""
+    return _skill_registry.run(skill_id, body.method, body.params or {})

@@ -90,6 +90,26 @@ cloud/cloud_orchestrator/
 app/                 Android 手机端（对话 UI + 内置浏览器 + 导出登录态）
 ```
 
+## 登录态（是什么 + 每个 skill 从哪来）
+
+**登录态 = 请求时带的"门禁卡"**：每次请求带着它，网站才知道是你。
+卡的样式可能是 token / cookie / sessionId（本质一样，只是放的位置/样式不同）：
+- **Token**：请求头 `Authorization: Bearer xxx`（如鼓楼医院）
+- **Cookie**：请求自动带 `session=xxx`（如途牛网页版）
+- **sessionId**：请求参数带 `sid=xxx`（如途牛小程序）
+
+**关键**：微信小程序（鼓楼医院、途牛）的登录态在微信私有通道里，**内置浏览器导出拿不到**。各 skill 登录态正确来源如下：
+
+> 📌 **登录态说明是每个 skill 的固定栏目**：未来新增 skill 必须在制作端 `contract.json` 的 `auth.how_to_get` 里写明「①形式 ②从哪来 ③要不要人配合」，拖到本仓库后补进下表——缺登录态说明的 skill 视为不完整，不能上线。
+
+| skill | 登录态形式 | 从哪来（正确来源） | 要内置浏览器吗 | 现状 |
+|---|---|---|---|---|
+| glyy 鼓楼医院 | Bearer token | **云端 API 短信登录**：get_graphical_captcha → send_sms → login（人输图形验证码 + 短信码） | ❌ 不需要 | ✅ 已实现，待手机实测 |
+| tuniu 查询 | apiKey | **config.json 配置**（`tuniu.api_key`） | ❌ 不需要 | ✅ 已配置，查询可用 |
+| tuniu 下单 | cookies + sessionId | **网页版**：App 内置浏览器登录 → 导出 cookies；**小程序**：抓包拿 sessionId | ⚠️ 网页版可，小程序不行 | 🔄 需重新获取一次 |
+
+> 说明：glyy 走短信验证码 API 登录（云端直调），完全不需要内置浏览器；途牛查询用 apiKey 免登录；只有途牛下单需要登录态（网页版导出或抓包，一次性获取后持久化复用）。
+
 ## 登录态文件（持久化于 data/sessions/，云端重启不丢）
 
 | skill | 登录态文件 | 获取方式 |

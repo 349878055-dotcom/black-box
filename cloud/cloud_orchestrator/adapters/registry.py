@@ -23,48 +23,217 @@ from .glyy_api import GlyyAPI
 # methods 里可带 keywords: 方法检索关键词（用户常见说法）
 ADAPTERS: dict[str, dict] = {
     "glyy": {
-        "name": "南京鼓楼医院互联网医院（微信小程序）",
-        "aliases": ["鼓楼医院", "南京鼓楼医院", "鼓楼", "鼓楼医院互联网医院", "鼓楼医院小程序"],
-        "class": GlyyAPI,
-        "flow": [
-            {"step": 1, "title": "① 查科室", "methods": ["list_depts"]},
-            {"step": 2, "title": "② 查科室医生", "methods": ["list_doctors"]},
-            {"step": 3, "title": "③ 可约日期", "methods": ["get_available_dates"]},
-            {"step": 4, "title": "④ 查排班（含时段明细）", "methods": ["get_schedule"]},
-            {"step": 5, "title": "⑤ 患者信息", "methods": ["get_patient"]},
-            {"step": 6, "title": "⑥ 登录（图形验证码+短信真人配合）", "methods": ["get_graphical_captcha", "send_sms", "login"]},
-            {"step": 7, "title": "⑦ 提交挂号（⚠️真挂号，须确认）", "methods": ["register", "book"]},
-            {"step": 8, "title": "⑧ 订单/取消", "methods": ["list_orders", "cancel_reservation"]},
-        ],
-        "methods": {
-            "list_depts": {"desc": "科室列表（533个）→ [{dept_code, dept_name, branch_code}]", "keywords": ["科室", "看什么科", "科室列表"], "need_login": False, "params": {}},
-            "list_doctors": {"desc": "科室医生 → [{doctor_code, doctor_name, title, intro}]", "keywords": ["医生", "有哪些医生", "专家医生"], "need_login": False, "params": {"dept_code": "科室代码"}},
-            "get_available_dates": {"desc": "可预约日期列表", "keywords": ["可约日期", "哪天能挂", "放号日期"], "need_login": False, "params": {"dept_code": "科室代码", "begin": "YYYY-MM-DD可空", "end": "YYYY-MM-DD可空", "business_type": "1普通/2专家"}},
-            "get_schedule": {"desc": "排班 → {normal, expert}，每条含 schedule_id + detail(时段)", "keywords": ["排班", "号源", "出诊", "门诊时间", "可约时间"], "need_login": False, "params": {"dept_code": "科室代码", "date": "YYYY-MM-DD", "business_type": "1/2", "schedule_type": "1/2", "type_": "0/1"}},
-            "get_patient": {"desc": "患者信息 → {name, id_card(可能脱敏), phone}", "keywords": ["我的信息", "就诊人", "患者", "身份证"], "need_login": True, "params": {}},
-            "get_graphical_captcha": {"desc": "步骤1：抓图形验证码 → /tmp/glyy_captcha.png（用户看图）", "keywords": ["验证码", "图形验证码"], "need_login": False, "params": {"phone": "手机号"}},
-            "send_sms": {"desc": "步骤2：发短信验证码", "keywords": ["发短信", "短信验证码"], "need_login": False, "params": {"phone": "手机号", "gcode": "图形验证码"}},
-            "login": {"desc": "步骤3：手机号+短信验证码登录 → 保存 token", "keywords": ["登录", "验证码登录"], "need_login": False, "params": {"phone": "手机号", "code": "短信验证码"}},
-            "register": {"desc": "提交挂号 ⚠️真挂号须确认", "keywords": ["挂号", "预约", "挂个号", "提交挂号"], "need_login": True, "params": {"dept_code": "科室", "doctor_code": "医生", "appointment_time": "日期", "schedule_id": "排班ID", "schedule_num_id": "时段ID", "start_hour": "时段", "reg_fee": "元", "business_type": "1/2", "patient": "患者dict"}},
-            "book": {"desc": "一键挂号（自动查排班选时段提交）⚠️真挂号须确认", "keywords": ["挂号", "预约", "挂某某的号", "帮挂号", "看病", "就诊", "挂个号"], "need_login": True, "params": {"dept_code": "科室代码可空", "dept_name": "科室名", "doctor_code": "医生可空", "date": "日期可空", "business_type": "2专家/1普通", "id_card": "身份证", "open_id": "微信openid可空"}},
-            "list_orders": {"desc": "我的预约/订单列表", "keywords": ["我的预约", "我的挂号", "订单", "已约的号"], "need_login": True, "params": {"page": "0", "size": "10"}},
-            "cancel_reservation": {"desc": "取消预约（⚠️7天退约次数限制）", "keywords": ["取消预约", "退号", "取消挂号", "退约"], "need_login": True, "params": {"schedule_id": "排班ID"}},
-            "list_reports": {"desc": "查报告（check检查/examine检验，需日期范围）", "keywords": ["报告", "检查报告", "检验报告", "化验单", "报告单", "结果"], "need_login": True, "params": {"start_date": "YYYY-MM-DD可空", "end_date": "YYYY-MM-DD可空", "kind": "check/examine"}},
-            "clinic_no_paid": {"desc": "门诊待缴费列表", "keywords": ["缴费", "待缴费", "费用", "欠费", "付钱"], "need_login": True, "params": {}},
-            "visit_records": {"desc": "就诊记录（POST）", "keywords": ["就诊记录", "看过什么病", "历史就诊"], "need_login": True, "params": {}},
-            "get_recipe": {"desc": "按就诊查处方列表", "keywords": ["处方", "药方", "开药", "药品"], "need_login": True, "params": {"visit_id": "就诊ID可空"}},
-            "get_recipe_detail": {"desc": "处方详情（药品清单）", "keywords": ["处方详情", "药品清单", "吃什么药"], "need_login": True, "params": {"recipe_id": "处方ID"}},
-            "clinic_no_paid_detail": {"desc": "门诊待缴费详情", "keywords": ["缴费详情", "费用明细"], "need_login": True, "params": {"register_id": "挂号ID可空"}},
-            "visit_patient_record": {"desc": "就诊病历记录", "keywords": ["病历", "病历记录", "看诊记录"], "need_login": True, "params": {"visit_id": "就诊ID"}},
-            "re_clinic_schedule": {"desc": "复诊排班", "keywords": ["复诊", "复查", "复诊排班"], "need_login": True, "params": {"doctor_code": "医生代码可空"}},
-            "medical_pay": {"desc": "医疗支付信息", "keywords": ["医疗支付", "支付信息", "付费"], "need_login": True, "params": {}},
-            "online_depts": {"desc": "互联网科室列表（在线咨询入口）", "keywords": ["在线咨询", "互联网医院", "网上问诊", "在线问诊"], "need_login": True, "params": {}},
-            "expert_cloud_depts": {"desc": "专家云诊室科室+时段", "keywords": ["专家云诊室", "云诊室", "线上专家"], "need_login": True, "params": {}},
-            "online_search": {"desc": "在线搜索（医生/科室）", "keywords": ["在线搜索", "搜医生", "搜科室"], "need_login": True, "params": {"key": "关键词"}},
-            "judge_revisit": {"desc": "复诊判断（凭身份证）", "keywords": ["复诊判断", "能不能复诊", "是否复诊"], "need_login": True, "params": {"id_card": "身份证号"}},
-            "online_doctor_schedule": {"desc": "在线医生排班", "keywords": ["在线医生", "网上排班", "在线出诊"], "need_login": True, "params": {"doctor_code": "医生代码可空"}},
-        },
+  "name": "南京鼓楼医院互联网医院",
+  "class": "GlyyAPI",
+  "flow": [
+    {
+      "step": 1,
+      "title": "① 使用",
+      "methods": [
+        "login",
+        "list_depts",
+        "list_doctors",
+        "get_available_dates",
+        "get_schedule",
+        "get_patient",
+        "register",
+        "list_orders"
+      ]
+    }
+  ],
+  "methods": {
+    "login": {
+      "desc": "手机号+短信验证码登录 → {access_token, refresh_token, ...}",
+      "keywords": [
+        "登录(手机验证码)"
+      ],
+      "examples": [
+        "登录(手机验证码)"
+      ],
+      "need_login": False,
+      "params": {
+        "phone": "{phone}"
+      }
     },
+    "list_depts": {
+      "desc": "科室列表（533个）→ [{dept_code, dept_name, branch_code}]",
+      "keywords": [
+        "科室",
+        "医院科室",
+        "有哪些科"
+      ],
+      "examples": [
+        "鼓楼医院有哪些科室",
+        "看皮肤科挂哪个科"
+      ],
+      "need_login": False,
+      "params": {}
+    },
+    "list_doctors": {
+      "desc": "科室医生 → [{doctor_code, doctor_name, title, intro}]",
+      "keywords": [
+        "医生",
+        "专家",
+        "大夫"
+      ],
+      "examples": [
+        "皮肤科有哪些医生",
+        "看专家号"
+      ],
+      "need_login": False,
+      "params": {}
+    },
+    "get_available_dates": {
+      "desc": "可预约日期列表（business_type 1=普通号 2=专家号）",
+      "keywords": [
+        "可约日期",
+        "哪天能约",
+        "放号"
+      ],
+      "examples": [
+        "这周哪天能约",
+        "什么时候放号"
+      ],
+      "need_login": False,
+      "params": {
+        "begin_date": "YYYY-MM-DD",
+        "end_date": "YYYY-MM-DD",
+        "branch_code": "1",
+        "business_type": "1|2",
+        "res_src": "801"
+      }
+    },
+    "get_schedule": {
+      "desc": "排班 → {normal:[...], expert:[...]}，每条含 schedule_id/reg_fee/noon_code/doctor + detail(时段数组: time_part/schedule_num_id/remaining_num/is_enable)",
+      "keywords": [
+        "排班",
+        "出诊时间",
+        "哪天有号"
+      ],
+      "examples": [
+        "张医生这周出诊吗",
+        "明天有号吗"
+      ],
+      "need_login": False,
+      "params": {
+        "begin_date": "YYYY-MM-DD",
+        "end_date": "YYYY-MM-DD",
+        "schedule_type": "1|2",
+        "type": "0|1",
+        "branch_code": "1",
+        "need_detail": "true",
+        "business_type": "1|2",
+        "res_src": "801"
+      }
+    },
+    "get_patient": {
+      "desc": "患者信息 → {patient_codes, name, id_card(脱敏), phone}；另 /user/patient/all 返回完整列表",
+      "keywords": [
+        "我的信息",
+        "就诊人",
+        "患者"
+      ],
+      "examples": [
+        "我的就诊人信息",
+        "添加就诊人"
+      ],
+      "need_login": True,
+      "params": {}
+    },
+    "register": {
+      "desc": "提交预约（⚠️真挂号有副作用，须用户确认）",
+      "keywords": [
+        "挂号",
+        "预约",
+        "提交"
+      ],
+      "examples": [
+        "帮我挂号",
+        "预约皮肤科"
+      ],
+      "need_login": True,
+      "params": {}
+    },
+    "list_orders": {
+      "desc": "预约/订单列表 → [{id, order_no, state, create_time}]",
+      "keywords": [
+        "我的订单",
+        "预约记录",
+        "查订单"
+      ],
+      "examples": [
+        "我挂的号有哪些",
+        "我的预约记录"
+      ],
+      "need_login": True,
+      "params": {
+        "page": "0",
+        "size": "10",
+        "start_time": "",
+        "end_time": "",
+        "type": ""
+      }
+    },
+    "cancel_reservation": {
+      "desc": "取消预约（⚠️7天内退约次数有限制）",
+      "keywords": [
+        "取消预约"
+      ],
+      "examples": [
+        "取消预约"
+      ],
+      "need_login": True,
+      "params": {
+        "schedule_id": ""
+      }
+    },
+    "list_reports": {
+      "desc": "查报告（kind=check检查/examine检验，需日期范围；无数据返回[]）",
+      "keywords": [
+        "检查报告",
+        "检验报告",
+        "报告"
+      ],
+      "examples": [
+        "我的检查报告",
+        "查检验报告"
+      ],
+      "need_login": True,
+      "params": {
+        "start_date": "YYYY-MM-DD",
+        "end_date": "YYYY-MM-DD"
+      }
+    },
+    "clinic_no_paid": {
+      "desc": "门诊待缴费列表",
+      "keywords": [
+        "待缴费",
+        "未缴费",
+        "缴费"
+      ],
+      "examples": [
+        "我有待缴费的吗",
+        "门诊费用"
+      ],
+      "need_login": True,
+      "params": {}
+    },
+    "visit_records": {
+      "desc": "就诊记录（POST）",
+      "keywords": [
+        "就诊记录",
+        "病历",
+        "看过什么病"
+      ],
+      "examples": [
+        "我的就诊记录",
+        "历史病历"
+      ],
+      "need_login": True,
+      "params": {}
+    }
+  }
+},
 
     "tuniu": {
         "name": "途牛（官方 MCP + 官网）",
@@ -108,7 +277,10 @@ _web_instances: dict[str, object] = {}
 
 def _get_instance(platform: str):
     if platform not in _instances:
-        _instances[platform] = ADAPTERS[platform]["class"]()
+        cls = ADAPTERS[platform]["class"]
+        if isinstance(cls, str):
+            cls = globals().get(cls)  # 兼容发布生成/手写的字符串类名
+        _instances[platform] = cls() if cls else None
     return _instances[platform]
 
 
