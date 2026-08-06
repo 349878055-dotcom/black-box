@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>虾米浏览器</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: #f5f6f8; }
+  header { display: flex; align-items: center; gap: 10px; padding: 12px 14px; background: #fff; border-bottom: 1px solid #e5e5e5; }
+  header button { border: none; background: none; color: #4a90d9; font-size: 15px; cursor: pointer; }
+  header b { font-size: 15px; color: #333; }
+  .bar { display: flex; gap: 8px; padding: 12px 14px; }
+  .bar input { flex: 1; padding: 11px 14px; border-radius: 22px; border: 1px solid #d1d5db; font-size: 14px; outline: none; background: #fff; }
+  .bar input:focus { border-color: #4a90d9; }
+  .bar button { padding: 11px 18px; border-radius: 22px; border: none; background: #4a90d9; color: #fff; font-size: 14px; cursor: pointer; }
+  .links { padding: 4px 14px; }
+  .links .row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  .links a { display: inline-flex; align-items: center; gap: 5px; padding: 10px 14px; background: #fff; border: 1px solid #ececec; border-radius: 10px; color: #333; text-decoration: none; font-size: 13px; }
+  .tip { padding: 18px 16px; color: #9ca3af; font-size: 12px; line-height: 1.6; }
+</style>
+</head>
+<body>
+<header>
+  <button onclick="AndroidBridge.showChat()">← 返回聊天</button>
+  <b>🌐 虾米浏览器</b>
+</header>
+
+<div class="bar">
+  <input id="u" placeholder="输入网址，如 https://www.baidu.com" onkeydown="if(event.key==='Enter')go()">
+  <button onclick="go()">前往</button>
+</div>
+
+<div class="links">
+  <div class="row">
+    <a href="#" onclick="go2('http://140.143.144.28/test-site')">🖥 演示站</a>
+    <a href="#" onclick="go2('https://www.baidu.com')">🔍 百度</a>
+    <a href="#" onclick="go2('https://www.bing.com')">🌐 必应</a>
+    <a href="#" onclick="go2('https://www.google.com')">Google</a>
+  </div>
+</div>
+
+<div class="tip">
+  skill 执行时会自动在此打开目标网页，并真实地点击 / 填表 / 提交。<br>
+  想回到起始页：点上方「返回聊天」，再从左侧栏点「浏览器」。
+</div>
+
+<script>
+function norm(u) {
+  u = (u||'').trim();
+  if (!u) return '';
+  if (!/^https?:\/\//i.test(u)) u = 'https://' + u;
+  return u;
+}
+function go() { var u = norm(document.getElementById('u').value); if (u) location.href = u; }
+function go2(u) { location.href = norm(u); }
+</script>
+</body>
+</html>

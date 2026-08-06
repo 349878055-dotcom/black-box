@@ -1,0 +1,13 @@
+# 虾米 · 个人助手 — 云端编排依赖
+# 本项目 = 手机端 + 云端编排（仅执行 skill，不做探索 / browser-use）
+
+# ── 云端编排 (cloud_orchestrator/) ──
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+httpx>=0.25.0
+sse-starlette>=1.8.0
+python-multipart>=0.0.9
+Pillow
+# 12320 验证码自动识别（login_auto 用；本地 OCR，离线）
+# 安装：pip install --user --break-system-packages ddddocr
+ddddocr>=1.4.7
