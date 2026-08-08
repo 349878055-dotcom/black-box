@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 import os
 
-from .api import GlyyAPI
+from .api.api import GlyyAPI
 
 _here = os.path.dirname(os.path.abspath(__file__))
 _contract = json.load(open(os.path.join(_here, "contract.json"), encoding="utf-8"))

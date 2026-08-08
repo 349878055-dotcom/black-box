@@ -50,3 +50,7 @@ app/local.properties
 glyy_captcha.png
 phone_*.png
 *_screen.png
+
+# ⚠️ 含明文账号/密码（云服务器密码、测试账号），绝不入库
+tools/deploy_cloud.py
+*phone_test_shell.html

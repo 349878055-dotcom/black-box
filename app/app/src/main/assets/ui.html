@@ -14,7 +14,7 @@
   .main { flex: 1; min-width: 0; }
 
   /* ── 左侧栏（默认收起，点击汉堡弹出）── */
-  .side-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 35; display: none; }
+  .side-overlay { position: fixed; top: 0; right: 0; bottom: 0; left: 0; background: rgba(0,0,0,.35); z-index: 35; display: none; touch-action: none; }
   .side-overlay.show { display: block; }
   .sidebar { position: fixed; top: 0; bottom: 0; left: 0; width: 250px; background: #171717; color: #ececec; display: none; flex-direction: column; z-index: 40; transform: translateX(-105%); transition: transform .25s ease; }
   .sidebar.open { display: flex; transform: translateX(0); }
@@ -125,7 +125,7 @@
   .empty b { display: block; font-size: 15px; color: #6b7280; margin-bottom: 6px; }
 
   /* ── 弹层 ── */
-  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: none; align-items: center; justify-content: center; z-index: 30; }
+  .modal-bg { position: fixed; top: 0; right: 0; bottom: 0; left: 0; background: rgba(0,0,0,.45); display: none; align-items: center; justify-content: center; z-index: 30; }
   .modal-bg.show { display: flex; }
   .modal { background: #fff; border-radius: 16px; padding: 20px; width: 92%; max-width: 420px; max-height: 86vh; overflow-y: auto; }
   .modal h2 { font-size: 17px; margin-bottom: 4px; }
@@ -133,8 +133,8 @@
 </head>
 <body>
 <div class="shell">
-  <!-- 侧栏遮罩 -->
-  <div class="side-overlay" id="sideOverlay" onclick="closeSidebar()"></div>
+  <!-- 侧栏遮罩（ontouchstart/onclick；原生层另有 ACTION_DOWN 兜底） -->
+  <div class="side-overlay" id="sideOverlay" ontouchstart="closeSidebar()" onclick="closeSidebar()"></div>
 
   <!-- 左侧栏（DeepSeek/Gemini 式可收缩：顶部功能 + 会话列表 + 底部用户/设置） -->
   <div class="sidebar" id="sidebar">
@@ -208,7 +208,7 @@
           <h3>⚙️ 设置</h3>
           <div class="field-row"><label>云端地址</label><input id="setBase" placeholder="http://140.143.144.28"></div>
           <button class="btn small" onclick="saveBase()">💾 保存云端地址</button>
-          <div class="muted" style="margin-top:6px">改地址后需重新登录/重进生效（本地演示可填局域网 IP，如 http://192.168.1.175:19000）</div>
+          <div class="muted" style="margin-top:6px">改地址后需重新登录/重进生效（手机请直连腾讯云 http://140.143.144.28，勿填本地地址）</div>
           <button class="btn" style="margin-top:8px" onclick="openBrowser()">🌐 打开内置浏览器</button>
           <div class="field-row" style="margin-top:8px"><label>导出登录态（域名）</label><input id="expDomain" placeholder="https://www.tuniu.com"></div>
           <button class="btn small" onclick="exportCookies()">🔑 导出该网站登录态（存本地）</button>

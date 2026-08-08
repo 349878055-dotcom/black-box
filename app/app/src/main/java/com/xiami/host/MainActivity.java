@@ -537,8 +537,20 @@ public class MainActivity extends Activity {
         w.setFocusable(true);
         w.setFocusableInTouchMode(true);
         // 点输入框强制弹键盘（不依赖 JS onfocus 时机，兼容部分 ROM WebView 不弹键盘）
+        final float sidebarPx = 250f * getResources().getDisplayMetrics().density;   // 侧边栏宽 250 CSS px(≈dp)
         w.setOnTouchListener((v, ev) -> {
-            if (ev.getAction() == android.view.MotionEvent.ACTION_UP) {
+            final int act = ev.getActionMasked();
+            // 侧边栏「点右侧收回」：原生在 DOWN 时让 JS 自查侧边栏是否打开，是则关闭（幂等，未开无操作）。
+            // 华为 WebView 对遮罩（覆盖可滚动区）上方的触摸会吞掉 click/touchstart，前端事件不可靠，必须由原生兜底；
+            // 不依赖任何 JS 状态标记，直接查 DOM 真实状态。
+            if (act == android.view.MotionEvent.ACTION_DOWN && ev.getX() > sidebarPx) {
+                try {
+                    uiWeb.evaluateJavascript(
+                        "(function(){var s=document.getElementById('sidebar');" +
+                        "if(s&&s.classList.contains('open')){closeSidebar();}})();", null);
+                } catch (Exception ignore) {}
+            }
+            if (act == android.view.MotionEvent.ACTION_UP) {
                 v.requestFocus();
                 final float y = ev.getY();
                 v.postDelayed(() -> {
@@ -1011,6 +1023,7 @@ public class MainActivity extends Activity {
         public void loginInput(String value) {
             onLoginInput(value);
         }
+
 
         /** 第 5 条：打开系统浏览器支付（App 内零收款，支付全流程在第三方收银台）。 */
         @JavascriptInterface

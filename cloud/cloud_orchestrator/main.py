@@ -35,6 +35,14 @@ app.middleware("http")(auth_middleware)
 
 app.include_router(api_router)
 
+# 静态资源（测试壳子 phone_test_shell.html 等，浏览器直接访问 http://140.143.144.28/static/...）
+from fastapi.staticfiles import StaticFiles
+import os as _os
+
+_STATIC_DIR = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "static")
+_os.makedirs(_STATIC_DIR, exist_ok=True)
+app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
+
 
 if __name__ == "__main__":
     uvicorn.run(

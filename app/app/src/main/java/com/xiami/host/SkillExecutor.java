@@ -58,8 +58,6 @@ public class SkillExecutor {
         this.loginInteractor = interactor;
     }
 
-    private boolean _loginRetried = false;  // 防止登录后无限重试
-
     /** 执行蓝图，返回 skill_result JSON 字符串：{ok,status,headers,body,error}。 */
     public String execute(String blueprintJson) {
         HttpURLConnection conn = null;
@@ -68,23 +66,6 @@ public class SkillExecutor {
             JSONObject req = bp.optJSONObject("request");
             if (req == null) return fail("蓝图缺少 request");
 
-            // ── 方案②：执行前登录检测（手机端全权处理登录，云端 AI 不碰）──
-            // 蓝图附带 login 配置（来自 registry）+ 本地无该凭据 → 先 LoginCoordinator 登录，
-            // 登录成功后凭据存手机，再发真实请求（避免发空凭据请求）。
-            JSONObject loginCfg0 = bp.optJSONObject("login");
-            if (loginCfg0 != null && loginInteractor != null && !_loginRetried
-                    && hasLoginMethod(loginCfg0) && !hasCredential(bp.optString("skill", ""), loginCfg0)) {
-                android.util.Log.i("SkillExecutor", "执行前检测：本地无登录态，先自动登录 skill="
-                        + bp.optString("skill", ""));
-                LoginCoordinator coord = new LoginCoordinator(ctx, bp.optString("skill", ""),
-                        loginCfg0, loginInteractor);
-                if (coord.run()) {
-                    _loginRetried = true;
-                    android.util.Log.i("SkillExecutor", "执行前登录成功，继续发请求");
-                } else {
-                    return fail("登录未完成（用户取消或失败），请稍后重试");
-                }
-            }
             String method = req.optString("method", "GET").toUpperCase();
             String url = req.optString("url", "");
             if (url.isEmpty()) return fail("蓝图缺少 url");
@@ -209,21 +190,12 @@ public class SkillExecutor {
                 } catch (Exception ignore) {}
             }
 
-            // ── 登录信号检测 + 自动登录（方案②：手机端全权，云端 AI 不碰）──
-            // 蓝图附带 login 配置（来自 registry），响应命中 signal → 调通用登录引擎。
-            // 登录成功 → 凭据存手机 → 重试原请求（自动）。
+            // ── 登录信号检测（不再自动登录，改为引导客户自己打开浏览器登录）──
+            // 客户在浏览器手动登录后，登录态存手机（导出凭据），后续请求自动补凭据。
             JSONObject loginCfg = bp.optJSONObject("login");
-            if (loginCfg != null && loginInteractor != null && !_loginRetried) {
-                if (matchesLoginSignal(respBody, loginCfg)) {
-                    android.util.Log.i("SkillExecutor", "检测到登录信号，触发自动登录 skill=" + skill);
-                    LoginCoordinator coord = new LoginCoordinator(ctx, skill, loginCfg, loginInteractor);
-                    if (coord.run()) {
-                        _loginRetried = true;
-                        android.util.Log.i("SkillExecutor", "登录成功，重试原请求");
-                        return execute(blueprintJson);   // 递归重试（sessionId 已存手机，占位符重新替换）
-                    }
-                    return fail("登录未完成（用户取消或失败），请稍后重试");
-                }
+            if (loginCfg != null && matchesLoginSignal(respBody, loginCfg)) {
+                android.util.Log.i("SkillExecutor", "检测到登录信号，需要登录 skill=" + skill);
+                return fail("需要登录，请在浏览器打开登录页登录后重试");
             }
 
             JSONObject out = new JSONObject();
@@ -306,29 +278,6 @@ public class SkillExecutor {
             }
         } catch (Exception ignore) {}
         return null;
-    }
-
-    /** login 配置是否带登录方法（sms_verify 等）。 */
-    private boolean hasLoginMethod(JSONObject loginCfg) {
-        return loginCfg != null && !loginCfg.optString("method", "").isEmpty();
-    }
-
-    /** 本地是否已有该平台登录态（login.credential 字段在凭据库非空）。 */
-    private boolean hasCredential(String skill, JSONObject loginCfg) {
-        String field = loginCfg.optString("credential", "");
-        if ("sessionId".equals(field) || "session".equals(field)) {
-            String s = creds.getSessionId(skill);
-            return s != null && !s.isEmpty();
-        }
-        if ("token".equals(field)) {
-            String t = creds.getToken(skill);
-            return t != null && !t.isEmpty();
-        }
-        if ("cookie".equals(field)) {
-            String c = creds.getCookie(skill);
-            return c != null && !c.isEmpty();
-        }
-        return false;
     }
 
     /** 检测响应体是否命中登录信号（login.signal 里的任一词，如 "710114"/"未登录"）。 */
