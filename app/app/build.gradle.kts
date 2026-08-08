@@ -27,4 +27,5 @@ android {
 }
 
 dependencies {
+    // 第 6 条：SkillExecutor 用 HttpURLConnection（JDK 自带，零第三方依赖，离线可构建）
 }

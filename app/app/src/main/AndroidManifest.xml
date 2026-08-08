@@ -20,4 +20,13 @@
         </activity>
     </application>
 
+    <!-- 第 5/8 条：支付跳转系统浏览器 + 审核（Android 11+ 需声明可查询的 intent） -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" />
+        </intent>
+    </queries>
+
 </manifest>

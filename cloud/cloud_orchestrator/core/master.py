@@ -42,6 +42,8 @@ class MasterAgent:
         self._busy: set[str] = set()
         self._jobs: dict[str, asyncio.Task] = {}
         self._tasks: dict[str, TaskState] = {}
+        # 多轮对话记忆：device_id -> [{role, content}]（user/assistant 文本，含 ask_user 问答）
+        self._history: dict[str, list[dict]] = {}
 
     def get_task(self, device_id: str) -> dict[str, Any]:
         ts = self._tasks.get(device_id)
@@ -73,7 +75,13 @@ class MasterAgent:
         try:
             ask_fn = self._make_ask(device_id)
             agent = Agent(ask_user_fn=ask_fn, device_id=device_id)
-            reply = await agent.handle(message)
+            history = self._history.setdefault(device_id, [])
+            reply = await agent.handle(message, history=history[-8:])
+            # 多轮记忆：记录用户消息 + agent 回复（保留最近 20 条）
+            history.append({"role": "user", "content": message})
+            if reply:
+                history.append({"role": "assistant", "content": reply})
+            self._history[device_id] = history[-20:]
             if ts:
                 ts.status = "done"
                 ts.reply = reply
@@ -98,15 +106,27 @@ class MasterAgent:
                 ts.status = "waiting_user"
                 ts.ask = {"question": str(question)}
                 ts.summary = "等待你回复…"
+            # 多轮记忆：记录 agent 提问
+            self._history.setdefault(device_id, []).append(
+                {"role": "assistant", "content": f"（向你提问）{question}"})
             # 推送到 App 聊天（image 为验证码图片 base64，App 显示给用户看）
             params: dict = {"question": str(question), "kind": "user_input"}
             if image:
                 params["image"] = image
+                logger.info("[ask_user] 推送验证码图片 image长度=%d 前24=%s",
+                            len(str(image)), str(image)[:24])
+            else:
+                logger.info("[ask_user] 无图片参数（image=None）")
             try:
                 await bridge.send_cmd(device_id, "ask_user", params)
             except Exception:
                 pass
             ans = await bridge.wait_user_input(device_id, timeout=600)
+            if ans:
+                # 多轮记忆：记录用户回答（即使走新任务，新 agent 也能接续上下文）
+                self._history.setdefault(device_id, []).append(
+                    {"role": "user", "content": str(ans).strip()})
+                self._history[device_id] = self._history[device_id][-20:]
             if ts:
                 ts.status = "running"
                 ts.ask = None

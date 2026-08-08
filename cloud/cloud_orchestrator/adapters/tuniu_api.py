@@ -1,66 +1,50 @@
+
 """
-途牛 · AI 可读 API（两部分：官方 MCP 查询 + 微信小程序/官网下单支付）。
+途牛 · AI 可读 API（一个 skill 两种能力：查 + 买）。
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-① TuniuAPI — 途牛官方开放平台 MCP（查询为主，免费）
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  文档：https://open.tuniu.com/mcp/docs/
-  鉴权：请求头 apiKey（= TUNIU_API_KEY，cloud/config.json 的 tuniu.api_key）
-  URL ：https://openapi.tuniu.cn/mcp/{category}
-  方式：JSON-RPC 2.0（tools/list / tools/call），响应 JSON 或 SSE
+① 查（途牛官方开放平台 MCP，apiKey，免费，免登录）：
+   文档 https://open.tuniu.com/mcp/docs/；JSON-RPC + SSE
+   list_tools / search_train / train_detail / search_flight / search_hotel / search_ticket
+   —— 官方开放平台，只查询，不能下单（book 无权限）
 
-  实测（2026-08-06）：火车票搜索真实返回（南京→北京 1462 次，含票价/余票）。
-  查询全部免费；下单方法也可用但支付走途牛（真购买须用户确认）。
+② 买（途牛 M 站 m.tuniu.com，接口直调，需登录 cookie）：
+   set_cookies → submit_order（AddOrder，乘客直传 touristList，免网页"添加乘客"弹窗）→ pay
+   —— 下单创建订单，支付在手机支付宝/途牛 App 完成（电脑无支付宝客户端付不了）
 
-  用法：
-    api = TuniuAPI()
-    api.list_tools("train")                     → 该分类可用工具
-    api.search_train("南京","北京","2026-08-06")  → 火车票（车次+票价+余票）
-    api.train_detail("1462","2026-08-06")        → 车次详情（取 resId，下单前需要）
-    api.search_flight("南京","北京","2026-08-06") → 机票（低价航班）
-    api.search_hotel("南京","2026-08-06","2026-08-08") → 酒店
-    api.search_ticket("故宫")                    → 景点门票
-    api.book_train(...)                          → ⚠️ 订火车票（支付走途牛，须确认）
-    api.book_train_auto(...)                     → ⚠️ 一键订票（自动组装）
-    api.create_flight_order(...)                 → ⚠️ 创建机票订单
-    api.cancel_order(...)                        → 取消未支付订单
+关键点（2026-08-07 实测，AddOrder 下单成功 orderId=1259153040）：
+  - 下单必须登录（cookie：isLogined/ssoUser/muser/tuniuuser_id）；
+    登录 = passport.tuniu.com 手机号+短信（+腾讯滑块），真人配合一次保存 cookie 复用
+  - 「添加乘客拉不下来」= 途牛弹窗按手机屏做、电脑宽视口失效；本接口直接传乘客（touristList）完全绕开
+  - M 站有风控：直接访问详情页 URL 会"异常访问"，需从搜索页点入（页面自动化时注意）
 
-【TuniuAPI 全部 10 个方法】
-  查询：list_tools / search_train / train_detail / search_flight / search_hotel / search_ticket
-  下单：book_train / book_train_auto / create_flight_order / cancel_order
+Device-as-Proxy（docs/改造方案_DeviceAsProxy.md）：
+  - 云端 = 大脑：组装参数、生成「请求蓝图」、解析响应；
+  - 手机 = 手：经 executor（= bridge.send_skill_request 下发 skill_request）执行蓝图，
+    手机真实 IP 直连平台，回传原始响应 skill_result；
+  - ② M 站蓝图 credential=kind:cookie → 手机 SkillExecutor 从本地凭据库补 Cookie 头（云端不持有登录态）；
+  - 未注入 executor 时自动降级为旧「云端直发」（兼容单机测试）。
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-② TuniuWebAPI — 途牛微信小程序/官网（下单 + 支付闭环）
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  来源：途牛微信小程序真实抓包（2026-08-05 实测下单成功 orderId 1259150779）
-  登录态：sessionId（途牛小程序会话）+ cookies（App「导出登录态」/ 抓包获取）
-  host：m-p.tuniu.com / m.tuniu.com
-  说明：这是「真购买」通道——下单走途牛支付，手机 App 内置浏览器 + 支付宝唤起支付
+用法：
+  api = TuniuAPI()                                  # —— 查（MCP）——
+  await api.search_train("南京", "北京", "2026-08-06")  # → 车次+票价+余票
 
-  用法：
-    api = TuniuWebAPI(cookies=..., session_id=...)
-    api.web_search_train("南京","北京","2026-08-07")  → 官网查车次（含 resId）
-    api.web_get_travellers()                          → 12306 实名乘客（下单用）
-    api.web_add_order({...})                          → ⚠️ 提交订单（真购买）
-    api.web_order_detail(order_id)                    → 订单详情
-    api.web_cancel_order(order_id)                    → ⚠️ 取消订单（真实取消）
-    api.web_contacts()                                → 联系人列表
-    api.web_coupons()                                 → 火车票优惠券
-    api.web_calendar("南京","北京","2026-08-07")       → 车次日历
-
-【TuniuWebAPI 全部 8 个方法】
-  查车次：web_search_train / web_calendar
-  乘客/联系人：web_get_travellers / web_contacts
-  下单支付：web_add_order / web_order_detail / web_cancel_order
-  优惠券：web_coupons
-
-注册表里调用：web_* 方法走 TuniuWebAPI（registry 的 web_class）。
+  api = TuniuAPI(executor=...)                      # —— 买（M 站，手机通道）——
+  await api.set_cookies({...})                      # 先设登录 cookie（手机通道下由手机凭据库提供）
+  await api.submit_order(dep="上海", arr="苏州", date="2026-08-08",
+                         train_num="K528", seat_name="硬座",
+                         passengers=[{"name":"金涛","psptId":"320111198705186016",
+                                      "tel":"18913300200","psptType":1,
+                                      "birthday":"1987-05-18","sex":1}],
+                         contact_tel="18913300200")
+      # → {ok, order_id, order_amount, pay_url}，支付请用户在手机支付宝/途牛 App 完成
+  await api.pay(order_id)                           # → 返回支付入口（手机 App 完成）
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
-import os
+import urllib.parse
 
 import requests
 
@@ -68,33 +52,102 @@ from ..config import get
 
 logger = logging.getLogger("xiami.tuniu")
 
-BASE = "https://openapi.tuniu.cn/mcp"
+BASE = "https://openapi.tuniu.cn/mcp"     # ① MCP 查询
+M = "https://m.tuniu.com"                  # ② M 站（网页）
+MAPI = "https://api.tuniu.com"             # ② M 站接口
+CITY_CODES = {"上海": "2500", "苏州": "1615"}  # 途牛城市代码（实测确认；其余待补）
+M_UA = ("Mozilla/5.0 (Linux; Android 12; Pixel 5) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36")
+
+# ── 蓝图占位符（手机 SkillExecutor 本地替换）──
+PH_API_KEY = "{{api_key}}"
 
 
 class TuniuAPI:
-    def __init__(self, api_key: str | None = None) -> None:
+    """途牛：① 查（MCP，apiKey，免费）+ ② 买（M 站，cookie，下单/支付）。"""
+
+    def __init__(self, api_key: str | None = None, cookies: dict | None = None,
+                 executor=None) -> None:
+        # —— ① 查（MCP）——
         self.api_key = api_key or get("tuniu_api_key", "")
+        # Device-as-Proxy：手机执行通道（async (blueprint) -> {ok,status,headers,body,error}）
+        self.executor = executor
         self.headers = {
             "apiKey": self.api_key,
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
         }
+        # —— ② 买（M 站）——（手机通道下登录态由手机凭据库提供，此处仅云端直发降级用）
+        self.cookies: dict[str, str] = dict(cookies or {})
 
-    # ─────────── MCP 底层（JSON-RPC + SSE 解析）───────────
-    def _rpc(self, category: str, method: str, params: dict | None = None) -> dict:
+    # ─────────── 蓝图（第 3 条）───────────
+    def _blueprint(self, category: str, method: str, params: dict | None = None) -> dict:
+        # apiKey 是开放平台配置 key（非用户登录态），直接下发真实值，不依赖手机凭据库
+        api_key = self.api_key or PH_API_KEY
+        return {
+            "skill": "tuniu",
+            "request": {
+                "method": "POST",
+                "url": f"{BASE}/{category}",
+                "headers": {"apiKey": api_key, "Content-Type": "application/json",
+                            "Accept": "application/json, text/event-stream"},
+                "body": {"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}},
+                "sign_type": "none",
+            },
+            "credential": {"kind": "none", "target": "tuniu"},
+        }
+
+    def describe_request(self, method: str, **params) -> dict | None:
+        """第 3 条：MCP 方法名 → 蓝图（category 由方法决定）。复合方法返回 None。"""
+        cat = {
+            "list_tools": "train", "search_train": "train", "train_detail": "train",
+            "search_flight": "flight",
+            "search_hotel": "hotel", "search_ticket": "ticket",
+        }.get(method)
+        if not cat:
+            return None
+        rpc_name = {
+            "list_tools": "tools/list", "search_train": "tools/call",
+            "train_detail": "tools/call",
+            "search_flight": "tools/call",
+            "search_hotel": "tools/call",
+            "search_ticket": "tools/call",
+        }[method]
+        args = dict(params or {})
+        tool_name = {
+            "search_train": "searchLowestPriceTrain", "train_detail": "queryTrainDetail",
+            "search_flight": "searchLowestPriceFlight", "search_hotel": "tuniu_hotel_search",
+            "search_ticket": "query_cheapest_tickets",
+        }.get(method)
+        if rpc_name == "tools/call" and tool_name:
+            args = {"name": tool_name, "arguments": args}
+        return self._blueprint(cat, rpc_name, args)
+
+    # ─────────── MCP 底层（JSON-RPC + SSE 解析；有 executor 走手机）───────────
+    async def _rpc(self, category: str, method: str, params: dict | None = None) -> dict:
         """调途牛 MCP：返回 {ok, data/text/error}。"""
         if not self.api_key:
             return {"ok": False, "error": "途牛 apiKey 未配置（cloud/config.json 的 tuniu.api_key）"}
-        try:
-            r = requests.post(
-                f"{BASE}/{category}",
-                headers=self.headers,
-                json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}},
-                timeout=30,
-            )
-            payload = self._parse(r.text)
-        except Exception as e:
-            return {"ok": False, "error": f"途牛请求失败：{e}"}
+        if self.executor:
+            bp = self._blueprint(category, method, params)
+            res = await self.executor(bp)
+            if not isinstance(res, dict):
+                return {"ok": False, "error": "手机执行返回异常"}
+            if not res.get("ok"):
+                return {"ok": False, "error": str(res.get("error") or "手机执行失败"),
+                        "status": res.get("status")}
+            payload = self._parse(str(res.get("body") or ""))
+        else:
+            try:
+                r = requests.post(
+                    f"{BASE}/{category}",
+                    headers=self.headers,
+                    json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}},
+                    timeout=30,
+                )
+                payload = self._parse(r.text)
+            except Exception as e:
+                return {"ok": False, "error": f"途牛请求失败：{e}"}
 
         if isinstance(payload, dict) and payload.get("error"):
             return {"ok": False, "error": json.dumps(payload["error"], ensure_ascii=False)[:300]}
@@ -138,330 +191,284 @@ class TuniuAPI:
             return {"ok": True, "data": None}
         return {"ok": True, "data": result}
 
-    # ─────────── 查询（免费）───────────
-    def list_tools(self, category: str = "train") -> dict:
+    # ─────────── 查询（MCP，免费）───────────
+    async def list_tools(self, category: str = "train") -> dict:
         """列出某分类可用工具。"""
-        return self._rpc(category, "tools/list")
+        return await self._rpc(category, "tools/list")
 
-    def search_train(self, departure: str, arrival: str, date: str) -> dict:
-        """火车票搜索：南京→北京 2026-08-06 → 车次列表（含票价/余票）。"""
-        return self._rpc("train", "tools/call", {
+    async def search_train(self, departure: str, arrival: str, date: str) -> dict:
+        """火车票搜索（MCP，免费，仅查询）→ 车次+票价+余票。"""
+        return await self._rpc("train", "tools/call", {
             "name": "searchLowestPriceTrain",
             "arguments": {"departureCityName": departure, "arrivalCityName": arrival, "departureDate": date},
         })
 
-    def train_detail(self, train_num: str, date: str) -> dict:
-        """车次详情（站点/时刻）。"""
-        return self._rpc("train", "tools/call", {
-            "name": "queryTrainDetail",
-            "arguments": {"trainNum": train_num, "departureDate": date},
-        })
+    async def train_detail(self, train_num: str, date: str,
+                           departure: str = "", arrival: str = "") -> dict:
+        """车次详情（MCP，站点/时刻/席位）。
 
-    def search_flight(self, departure: str, arrival: str, date: str) -> dict:
-        """机票搜索：南京→北京 日期 → 航班列表（低价）。"""
-        return self._rpc("flight", "tools/call", {
+        ⚠️ 途牛 MCP queryTrainDetail 必填 departureStationName/arrivalStationName，
+        缺站名会失败（2026-08-07 实测修复）。departure/arrival 为出发/到达城市名。
+        """
+        args = {"trainNum": train_num, "departureDate": date}
+        if departure:
+            args["departureStationName"] = departure
+        if arrival:
+            args["arrivalStationName"] = arrival
+        return await self._rpc("train", "tools/call", {
+            "name": "queryTrainDetail", "arguments": args})
+
+    async def search_flight(self, departure: str, arrival: str, date: str) -> dict:
+        """机票搜索（MCP）→ 航班列表（低价）。"""
+        return await self._rpc("flight", "tools/call", {
             "name": "searchLowestPriceFlight",
             "arguments": {"departureCityName": departure, "arrivalCityName": arrival, "departureDate": date},
         })
 
-    def search_hotel(self, city: str, check_in: str, check_out: str) -> dict:
-        """酒店搜索：城市 + 入住/离店日期 → 酒店列表。"""
-        return self._rpc("hotel", "tools/call", {
+    async def search_hotel(self, city: str, check_in: str, check_out: str) -> dict:
+        """酒店搜索（MCP）→ 酒店列表。"""
+        return await self._rpc("hotel", "tools/call", {
             "name": "tuniu_hotel_search",
             "arguments": {"cityName": city, "checkIn": check_in, "checkOut": check_out},
         })
 
-    def search_ticket(self, scenic_name: str) -> dict:
-        """景点门票查询。"""
-        return self._rpc("ticket", "tools/call", {
+    async def search_ticket(self, scenic_name: str) -> dict:
+        """景点门票查询（MCP）。"""
+        return await self._rpc("ticket", "tools/call", {
             "name": "query_cheapest_tickets",
             "arguments": {"scenic_name": scenic_name},
         })
 
-    # ─────────── 下单（⚠️ 涉及支付，须用户确认）───────────
-    def book_train(self, **kwargs) -> dict:
-        """预订火车票（⚠️ 真购买，支付走途牛，须用户确认）。参数按途牛官方 bookTrain 要求。
-        必填：resources=[{resourceId, adultPrice, departsDate}], adultTourists=[{name,psptId,psptType,tel}],
-              contact={tel}。resourceId 必须来自 train_detail 的 seatInfo.resId。"""
-        return self._rpc("train", "tools/call", {"name": "bookTrain", "arguments": kwargs})
+    # ══════════════════ ② 买（M 站 m.tuniu.com，需登录 cookie）══════════════════
+    def _m_blueprint(self, method: str, url: str, body: dict | None = None,
+                     need_cookie: bool = True, form: bool = False) -> dict:
+        """M 站蓝图：手机 SkillExecutor 自动补 Cookie 头（credential kind=cookie）。
+        form=True → 手机端按表单编码（application/x-www-form-urlencoded）提交（AddOrder 用）。"""
+        h = {"User-Agent": M_UA, "Accept": "application/json, text/plain, */*",
+             "Referer": "https://m.tuniu.com/"}
+        req = {"method": method, "url": url, "headers": h,
+               "body": body, "sign_type": "none"}
+        if form:
+            req["body_type"] = "form"
+        return {
+            "skill": "tuniu",
+            "request": req,
+            "credential": ({"kind": "cookie", "target": "tuniu", "needs": ["cookie"]}
+                           if need_cookie else {"kind": "none", "target": "tuniu"}),
+        }
 
-    def book_train_auto(self, departure: str, arrival: str, date: str,
-                        train_num: str, seat_name: str = "二等座",
-                        passengers: list | None = None, contact_tel: str = "") -> dict:
-        """一键订火车票（⚠️ 真购买，支付走途牛，须用户明确确认）。
-        自动完成：搜车次 → 查详情（从 seatInfo 取 resId/price）→ 组装 → 下单。
-        passengers: [{"name":"张三","psptId":"身份证号","psptType":"1","tel":"手机号"}]
-        contact_tel: 联系人手机号。返回 {ok, order/error}。"""
+    async def _m_exec(self, bp: dict) -> dict:
+        """执行 M 站蓝图：有 executor 走手机（cookie 由手机凭据库补），否则云端直发降级。"""
+        if self.executor:
+            res = await self.executor(bp)
+            if not isinstance(res, dict):
+                return {"ok": False, "error": "手机执行返回异常"}
+            if not res.get("ok"):
+                return {"ok": False, "error": str(res.get("error") or "手机执行失败"),
+                        "status": res.get("status")}
+            body = str(res.get("body") or "")
+            try:
+                return json.loads(body or "{}")
+            except Exception:
+                return {"raw": body[:400], "http": res.get("status")}
+        # 云端直发降级（单机测试/无手机通道的 API 入口）
+        method = bp["request"]["method"]
+        url = bp["request"]["url"]
+        req_body = bp["request"].get("body")
+        form = bp["request"].get("body_type") == "form"
         try:
-            # 1. 搜车次（确认存在）
-            sr = self.search_train(departure, arrival, date)
-            if not sr.get("ok"):
-                return {"ok": False, "error": f"搜车次失败：{sr.get('error','')}"}
-            # 2. 查详情，从 seatInfo 找目标席别 resId
-            tr = self.train_detail(train_num, date)
-            if not tr.get("ok"):
-                return {"ok": False, "error": f"查车次详情失败：{tr.get('error','')}"}
-            detail = tr.get("data")
-            if isinstance(detail, dict):
-                detail = detail.get("data") or detail
-            seat_info = []
-            departs_date = date
-            if isinstance(detail, dict):
-                departs_date = detail.get("departsDate") or date
-                seat_info = detail.get("seatInfo") or []
-            elif isinstance(detail, list):
-                # 兼容：detail 可能是列表
-                for it in detail:
-                    if isinstance(it, dict) and it.get("seatInfo"):
-                        departs_date = it.get("departsDate") or date
-                        seat_info = it.get("seatInfo") or []
-                        break
-            if not seat_info:
-                return {"ok": False, "error": "车次详情没有 seatInfo（可能无票）"}
-            target = None
-            for s in seat_info:
-                name = str(s.get("seatName") or "")
-                if seat_name in name:
-                    target = s
-                    break
-            if target is None:
-                names = [str(s.get("seatName") or "") for s in seat_info]
-                return {"ok": False, "error": f"没有席别「{seat_name}」，可选：{names}"}
-            # 3. 组装下单参数
-            resources = [{
-                "resourceId": target.get("resId"),
-                "adultPrice": target.get("price"),
-                "departsDate": departs_date,
-            }]
-            adult_tourists = passengers or []
-            contact = {"tel": contact_tel}
-            return {
-                "ok": True,
-                "ready": True,
-                "order_params": {
-                    "train_num": train_num, "seat": seat_name,
-                    "resources": resources, "adultTourists": adult_tourists, "contact": contact,
-                },
-                "confirm_payload": {
-                    "resources": resources, "adultTourists": adult_tourists, "contact": contact,
-                },
-            }
+            r = requests.request(method, url,
+                                 data=req_body if form else None,
+                                 json=None if form else req_body,
+                                 headers=bp["request"].get("headers"),
+                                 cookies=self.cookies, timeout=25, verify=False)
+            try:
+                return r.json()
+            except Exception:
+                return {"raw": r.text[:400], "http": r.status_code}
         except Exception as e:
-            return {"ok": False, "error": f"一键订票异常：{e}"}
+            return {"ok": False, "error": f"途牛 M 站请求失败：{e}"}
 
-    def create_flight_order(self, **kwargs) -> dict:
-        """创建机票订单（⚠️ 真购买，支付走途牛，须用户确认）。"""
-        return self._rpc("flight", "tools/call", {"name": "saveOrder", "arguments": kwargs})
+    async def set_cookies(self, cookies: dict) -> dict:
+        """设置登录 cookie（从浏览器 / passport 登录后获取；手机通道下由手机凭据库提供，本方法为显式设置）。"""
+        self.cookies = dict(cookies or {})
+        return {"ok": True, "cookies_set": len(self.cookies),
+                "note": "手机通道下 Cookie 由手机本地凭据库自动补（本方法仅云端直发降级用）"}
 
-    def cancel_order(self, category: str = "train", **kwargs) -> dict:
-        """取消未支付订单。"""
-        return self._rpc(category, "tools/call", {"name": "cancelOrder", "arguments": kwargs})
-
-
-# ══════════════════════════════════════════════════════════════════
-# 途牛官网版（m-p.tuniu.com / m.tuniu.com）— 查车次 + 下单
-# 数据来源：途牛微信小程序真实抓包（2026-08-05 实测下单成功）。
-# 登录态：sessionId（途牛小程序会话）+ 可选 cookies。
-# ══════════════════════════════════════════════════════════════════
-class TuniuWebAPI:
-    """途牛官网/小程序 API：查车次（含 resId/价格）→ 乘客 → 下单 → 订单详情。
-
-    - 查车次/乘客：带 cookies（登录态）即可
-    - 下单 AddOrder：body 里带 sessionId（途牛小程序会话，需登录后获取）
-    """
-
-    BASE = "https://m-p.tuniu.com"
-    MBASE = "https://m.tuniu.com"
-    UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-          "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781")
-    REFERER = "https://servicewechat.com/wx340329c7ee375a33/523/page-frame.html"
-
-    _HERE = os.path.dirname(os.path.abspath(__file__))
-    _SESS_DIR = os.path.normpath(os.path.join(_HERE, "..", "..", "..", "cloud", "cloud_orchestrator", "data", "sessions"))
-    SESSION_FILE = os.path.join(_SESS_DIR, "tuniu_web_session.json")
-
-    def __init__(self, cookies: str | dict | None = None, session_id: str = "") -> None:
-        self.cookies: dict[str, str] = {}
-        if isinstance(cookies, str):
-            for it in cookies.split(";"):
-                it = it.strip()
-                if "=" in it:
-                    k, v = it.split("=", 1)
-                    self.cookies[k.strip()] = v.strip()
-        elif isinstance(cookies, dict):
-            self.cookies = cookies
-        self.session_id = session_id
-        self.token = ""
-        # 未传登录态 → 从持久化目录加载（重启不丢）
-        if not self.cookies and not self.session_id:
-            self._load_session()
-
-    # ─────────── 登录态持久化（data/sessions/，云端重启不丢）───────────
-    def _load_session(self) -> None:
-        try:
-            if os.path.exists(self.SESSION_FILE):
-                with open(self.SESSION_FILE, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                self.cookies = dict(data.get("cookies") or {})
-                self.session_id = str(data.get("session_id") or "")
-        except Exception as e:
-            logger.warning("途牛登录态加载失败: %s", e)
-
-    def save_session(self, cookies=None, session_id: str = "") -> str:
-        """保存途牛登录态（App 导出/抓包后调用），返回保存路径。"""
-        try:
-            if cookies is not None:
-                if isinstance(cookies, str):
-                    self.cookies = {}
-                    for it in cookies.split(";"):
-                        it = it.strip()
-                        if "=" in it:
-                            k, v = it.split("=", 1)
-                            self.cookies[k.strip()] = v.strip()
-                elif isinstance(cookies, dict):
-                    self.cookies = cookies
-            if session_id:
-                self.session_id = session_id
-            os.makedirs(self._SESS_DIR, exist_ok=True)
-            with open(self.SESSION_FILE, "w", encoding="utf-8") as f:
-                json.dump({"cookies": self.cookies, "session_id": self.session_id},
-                          f, ensure_ascii=False, indent=2)
-            logger.info("途牛登录态已保存 → %s", self.SESSION_FILE)
-            return self.SESSION_FILE
-        except Exception as e:
-            logger.warning("途牛登录态保存失败: %s", e)
-            return ""
-
-    def _post(self, base: str, path: str, body: dict, use_session: bool = False) -> dict:
-        h = {"User-Agent": self.UA, "Content-Type": "application/json",
-             "Referer": self.REFERER}
-        if self.token:
-            h["token"] = self.token
-        if use_session and self.session_id:
-            body = dict(body)
-            body.setdefault("sessionId", self.session_id)
-        r = requests.post(base + path, json=body, headers=h, cookies=self.cookies,
-                          timeout=25, verify=False)
-        try:
-            return r.json()
-        except Exception:
-            return {"raw": r.text[:300], "http": r.status_code}
-
-    def init_token(self) -> str:
-        """getLocalVersion → token（查车次前需要）。"""
-        j = self._post(self.BASE, "/api/train/trainApi/getLocalVersion", {})
-        self.token = (j.get("data") or {}).get("token", "")
-        return self.token
-
-    # ─────────── 查车次（官网，无需 sessionId）───────────
-    def web_search_train(self, departure: str, arrival: str, date: str) -> dict:
-        """官网查车次（m-p.tuniu.com ticketList）→ {rows:[...], count}。
-        每条含 trainId/trainNum/resId/seat/price/leftNumber（下单基础数据）。"""
-        self.init_token()
-        # 城市→代码（fuzzySearch data 是 list）
-        code = {}
-        for city in [departure, arrival]:
-            fz = self._post(self.BASE, "/api/train/product/fuzzySearch", {"keyword": city})
-            d = fz.get("data")
-            if isinstance(d, list) and d:
-                code[city] = d[0].get("cityCode")
-            elif isinstance(d, dict):
-                code[city] = d.get("cityCode")
-        dep_code = code.get(departure, ""); arr_code = code.get(arrival, "")
-        j = self._post(self.BASE, "/api/train/product/ticketList", {
-            "departureCityCode": dep_code, "arrivalCityCode": arr_code,
+    async def _resolve_train(self, departure: str, arrival: str, date: str) -> dict:
+        """私有：下单前从 M 站 ticketList 取车次/席别参数（resId/seatId/price/站点代码）。"""
+        dc, ac = CITY_CODES.get(departure, ""), CITY_CODES.get(arrival, "")
+        if not (dc and ac):
+            return {"ok": False,
+                    "error": f"未内置城市代码：{departure}/{arrival}，请在 tuniu_api.CITY_CODES 补充"}
+        d = json.dumps({
+            "ticketType": 0, "departureCityCode": dc, "arrivalCityCode": ac,
             "departureCityName": departure, "arrivalCityName": arrival,
             "departureDate": date,
-        })
-        if j.get("errorCode") == 710000:
-            return {"ok": True, "count": (j.get("data") or {}).get("count"),
-                    "rows": (j.get("data") or {}).get("rows") or []}
-        return {"ok": False, "error": j.get("msg") or str(j)[:200]}
+        }, ensure_ascii=False, separators=(",", ":"))
+        url = f"{M}/api/train/product/ticketList?d={urllib.parse.quote(d)}"
+        j = await self._m_exec(self._m_blueprint("GET", url, need_cookie=False))
+        data = j.get("data") or {}
+        if j.get("errorCode") != 710000:
+            return {"ok": False, "error": j.get("msg") or str(j)[:200], "raw": j}
+        trains = []
+        for t in (data.get("rows") or []):
+            seats = [{
+                "seatName": s.get("seatName"), "seatId": s.get("seatId"),
+                "price": s.get("adultPrice") or s.get("price"),
+                "resId": s.get("resId"), "leftNumber": s.get("leftNumber"),
+                "seatStatus": s.get("seatStatus"),
+            } for s in (t.get("seatDesc") or [])]
+            trains.append({
+                "trainId": t.get("trainId"), "trainNum": t.get("trainNum"),
+                "depart": t.get("departStationName"), "arrive": t.get("destStationName"),
+                "departCode": t.get("departStationCode"), "arriveCode": t.get("destStationCode"),
+                "departTime": t.get("departDepartTime"), "arriveTime": t.get("destArriveTime"),
+                "duration": t.get("duration"), "price_from": t.get("price"),
+                "seatDesc": seats,
+            })
+        return {"ok": True, "count": len(trains), "trains": trains}
 
-    # ─────────── 乘客 ───────────
-    def web_get_travellers(self) -> dict:
-        """12306 实名乘客（mergeQueryTravellerInfo）→ [{name, contacterId, psptId, ...}]。"""
-        j = self._post(self.MBASE, "/api/train/product/mergeQueryTravellerInfo",
-                       {"sessionId": self.session_id} if self.session_id else {})
-        if j.get("errorCode") == 710000:
-            return {"ok": True, "travellers": j.get("data") or []}
-        return {"ok": False, "error": j.get("msg") or str(j)[:200]}
+    async def submit_order(self, dep: str, arr: str, date: str, train_num: str, seat_name: str,
+                           passengers: list, contact_tel: str = "") -> dict:
+        """下单创建订单（M 站 AddOrder，⚠️真购票，需登录 cookie）。
 
-    # ─────────── 下单（⚠️ 真购买，须确认）───────────
-    def web_add_order(self, order: dict) -> dict:
-        """提交火车票订单（AddOrder，⚠️真购买，走途牛支付）。
-        order 需含：trainId/trainNumber/departDate/resourceId/seat/seatId/seatPrice/
-        ministryRailwaysId(12306绑定ID)/departure-arrival城市站/touristList(乘客)/contactList。
+        passengers: [{"name","psptId","tel","psptType":1,"birthday":"YYYY-MM-DD","sex":1}]
+        → {ok, order_id, order_amount, pay_url}；支付由用户在手机支付宝/途牛 App 完成。
         """
-        if not self.session_id:
-            return {"ok": False, "error": "缺少 sessionId（途牛小程序登录态）"}
-        body = dict(order)
-        body.setdefault("sessionId", self.session_id)
-        j = self._post(self.MBASE, "/api/train/order/AddOrder", body)
-        if j.get("errorCode") == 710000 and (j.get("data") or {}).get("success"):
-            return {"ok": True, "order_id": (j.get("data") or {}).get("orderId"),
-                    "data": j.get("data")}
-        return {"ok": False, "error": j.get("msg") or j.get("errorCode") or str(j)[:200],
-                "raw": j}
+        # 1) 取该车次的座席参数（resId/seatId/price/站点代码）
+        sr = await self._resolve_train(dep, arr, date)
+        if not sr.get("ok"):
+            return sr
+        train = next((t for t in sr["trains"] if t["trainNum"] == train_num), None)
+        if not train:
+            return {"ok": False, "error": f"未找到车次 {train_num}"}
+        seat = next((s for s in train["seatDesc"] if seat_name in (s["seatName"] or "")), None)
+        if not seat:
+            return {"ok": False,
+                    "error": f"无席别「{seat_name}」，可选：{[s['seatName'] for s in train['seatDesc']]}"}
 
-    def web_order_detail(self, order_id) -> dict:
-        """订单详情（orderDetail）。"""
-        j = self._post(self.MBASE, "/api/train/order/orderDetail",
-                       {"sessionId": self.session_id, "orderId": str(order_id)})
-        if j.get("errorCode") == 710000:
-            return {"ok": True, "order": j.get("data")}
-        return {"ok": False, "error": j.get("msg") or str(j)[:200]}
+        # 2) 组装 AddOrder 参数（字段与 2026-08-07 实测订单 1259153040 一致）
+        tourist = [{
+            "name": p.get("name"), "tel": p.get("tel"),
+            "psptType": p.get("psptType", 1), "psptId": p.get("psptId"),
+            "country": None, "birthday": p.get("birthday"),
+            "sex": p.get("sex", 1), "isAdult": p.get("isAdult", 1),
+            "psptEndDate": None, "isStuDisabledArmyPolice": 0, "stu": None,
+        } for p in passengers]
+        adult_price = seat["price"] or 0
+        body = {
+            "trainId": train["trainId"], "trainNumber": train["trainNum"],
+            "resourceId": seat["resId"], "seatId": seat["seatId"],
+            "isInsCashBack": 0, "departDate": date,
+            "adultCount": len(tourist), "childCount": 0,
+            "adultPrice": adult_price,
+            "ministryRailwaysId": 0,   # 12306 绑定 ID，便捷购票可 0（待实测确认）
+            "departureCityCode": CITY_CODES.get(dep, ""), "arrivalCityCode": CITY_CODES.get(arr, ""),
+            "departureCityName": dep, "arrivalCityName": arr,
+            "departureStations": [train["departCode"]], "departureStationName": train["depart"],
+            "arrivalStations": [train["arriveCode"]], "arrivalStationName": train["arrive"],
+            "insuranceResourceId": 0, "insurancePrice": 0,
+            "acceptStandingTicket": False, "isExcess": 0,
+            "contactList": {"name": "", "appellation": "", "email": "", "phone": "",
+                            "tel": contact_tel or (passengers[0].get("tel") if passengers else "")},
+            "touristList": tourist,
+            "isTransferToDispatchTicket": 0,
+            "extension": {
+                "servicePackageInfo": [{"type": 24, "number": len(tourist)}],  # 便捷购票 +¥10/张
+                "appBookInfo": [{"bookType": 5}],
+                "voucherInfo": [], "refundInsInfo": [{"hasBuyRefundIns": 0}],
+                "stuExtendedInfo": [{"fromStuPassageWay": False}],
+            },
+            "personalTailorInfo": {"info": ""},
+        }
+        # d 参数放 form body（body_type=form，手机 SkillExecutor 表单编码；与 2026-08-07 真实抓包一致）
+        d = json.dumps(body, ensure_ascii=False, separators=(",", ":"))
+        url = f"{MAPI}/tcs/gtc/train/order/AddOrder"
+        j = await self._m_exec(self._m_blueprint("POST", url,
+                                                 body={"d": d}, form=True))
+        data = j.get("data") or {}
+        # 途牛 AddOrder 成功判定（2026-08-07 实测）：
+        #   errorCode=710000 且 data.success；或 errorCode=130000（订单已创建/占座中）且 data.success；
+        #   或 data.errorCode=200（订单提交成功）。注意 130000 不是失败，是「订单创建成功」。
+        ok = ((j.get("errorCode") in (710000, 130000) and data.get("success"))
+              or data.get("errorCode") == 200)
+        if ok:
+            order_id = data.get("orderId") or data.get("orderNo")
+            pay_url = (str(data.get("orderDetailUrl") or "")
+                       or str(data.get("payUrl") or data.get("pay_url") or "")
+                       or f"{M}/u/order/{order_id}")
+            return {
+                "ok": True, "order_id": order_id,
+                "order_amount": data.get("orderAmount"),
+                "pay_url": pay_url,   # 手机打开此页支付
+                "raw": j,
+            }
+        msg = str(j.get("msg") or "")
+        # 170001「参数错误」：登录态已有仍参数错 → 下单参数问题，不是登录
+        if j.get("errorCode") == 170001 or "参数" in msg:
+            logger.warning("[tuniu] AddOrder 参数错误 errorCode=%s msg=%s raw=%s",
+                           j.get("errorCode"), msg[:120], str(j)[:300])
+            return {"ok": False, "error": (msg or "途牛下单参数错误"), "raw": j}
+        # 「已有相同订单正在处理」→ 重复下单拦截（非失败、非登录）
+        if "已有相同订单" in msg or "正在处理" in msg or "订单提交成功" in msg:
+            return {"ok": True, "order_id": data.get("orderId") or data.get("orderNo"),
+                    "duplicate": True, "error": msg, "raw": j}
+        # 其它失败（未登录/风控等）→ 触发登录引导（agent._login_tuniu 自动弹内置浏览器登录）
+        logger.warning("[tuniu] AddOrder 未成功 errorCode=%s msg=%s raw=%s",
+                       j.get("errorCode"), msg[:120], str(j)[:300])
+        return {"ok": False, "need_login": True,
+                "error": (msg or f"途牛下单未成功（{j.get('errorCode')}），可能未登录，请先登录后重试"), "raw": j}
 
-    # ─────────── 订单操作（小程序逆向补充）───────────
-    def web_cancel_order(self, order_id) -> dict:
-        """取消订单（newCancelOrder，GET + d 参数，⚠️真实取消）。"""
-        params = {"d": json.dumps({"sessionId": self.session_id,
-                                   "orderId": str(order_id)}, ensure_ascii=False)}
-        r = requests.get(self.MBASE + "/api/train/order/newCancelOrder", params=params,
-                         headers={"User-Agent": self.UA, "Referer": self.REFERER},
-                         cookies=self.cookies, timeout=25, verify=False)
-        try:
-            j = r.json()
-        except Exception:
-            return {"ok": False, "raw": r.text[:300]}
-        if j.get("errorCode") == 710000:
-            return {"ok": True, "data": j.get("data")}
+    async def pay(self, order_id: str, order_type: int = 38) -> dict:
+        """返回订单支付入口；pay_url 供 agent 自动 navigate 到内置浏览器支付页。"""
+        return {
+            "ok": True,
+            "order_id": order_id,
+            "pay_url": f"{M}/u/order/{order_id}?orderType={order_type}",
+            "pay_ways": [
+                f"手机打开途牛订单页支付：{M}/u/order/{order_id}?orderType={order_type}",
+                "途牛收银台（电脑需支付宝客户端/扫码）：cashier.tuniu.com",
+                "手机支付宝 App 内搜索/扫码支付",
+            ],
+        }
+
+    async def order_detail(self, order_id: str, order_type: int = 38) -> dict:
+        """订单详情（M 站 orderDetail，状态/金额/可否支付取消）；支付后确认用。"""
+        d = json.dumps({"orderId": str(order_id), "orderType": order_type},
+                       ensure_ascii=False, separators=(",", ":"))
+        url = f"{M}/api/train/order/orderDetail?d={urllib.parse.quote(d)}"
+        j = await self._m_exec(self._m_blueprint("GET", url))
+        if j.get("errorCode") in (710000, 130000):
+            return {"ok": True, "order": j.get("data"), "raw": j}
         return {"ok": False, "error": j.get("msg") or str(j)[:200], "raw": j}
 
-    def web_contacts(self, **extra) -> dict:
-        """联系人列表（contacts，GET + d 参数）。"""
-        body = {"sessionId": self.session_id, **extra}
-        r = requests.get(self.MBASE + "/api/train/order/contacts",
-                         params={"d": json.dumps(body, ensure_ascii=False)},
-                         headers={"User-Agent": self.UA, "Referer": self.REFERER},
-                         cookies=self.cookies, timeout=25, verify=False)
-        try:
-            j = r.json()
-        except Exception:
-            return {"ok": False, "raw": r.text[:300]}
-        return {"ok": j.get("errorCode") == 710000, "data": j.get("data"), "raw": j}
+    async def cancel_order(self, order_id: str, order_type: int = 38) -> dict:
+        """退票/取消订单（M 站 newCancelOrder，⚠️真实退票，须用户确认）。
 
-    def web_coupons(self, **extra) -> dict:
-        """我的火车票优惠券（getMyCoupons，GET + d 参数）。"""
-        body = {"sessionId": self.session_id, **extra}
-        r = requests.get(self.MBASE + "/api/train/order/getMyCoupons",
-                         params={"d": json.dumps(body, ensure_ascii=False)},
-                         headers={"User-Agent": self.UA, "Referer": self.REFERER},
-                         cookies=self.cookies, timeout=25, verify=False)
-        try:
-            j = r.json()
-        except Exception:
-            return {"ok": False, "raw": r.text[:300]}
-        return {"ok": j.get("errorCode") == 710000, "data": j.get("data"), "raw": j}
+        占座中/未支付订单→取消；已出票订单→按途牛退票规则退票。
+        """
+        d = json.dumps({"orderId": str(order_id), "orderType": order_type},
+                       ensure_ascii=False, separators=(",", ":"))
+        url = f"{M}/api/train/order/newCancelOrder?d={urllib.parse.quote(d)}"
+        j = await self._m_exec(self._m_blueprint("GET", url))
+        if j.get("errorCode") in (710000, 130000):
+            return {"ok": True, "data": j.get("data"), "raw": j}
+        return {"ok": False, "error": j.get("msg") or str(j)[:200], "raw": j}
 
-    def web_calendar(self, departure: str, arrival: str, date: str) -> dict:
-        """车次日历（calendarV2，看哪天有票）。"""
-        self.init_token()
-        j = self._post(self.BASE, "/api/train/product/calendarV2", {
-            "departureCityName": departure, "arrivalCityName": arrival,
-            "departureDate": date,
-        })
-        return {"ok": j.get("errorCode") == 710000, "data": j.get("data"), "raw": j}
+    async def order_list(self, page_no: int = 1, page_size: int = 10) -> dict:
+        """我的火车票订单列表（M 站 orderList）→ [{orderId, 状态, 车次, 金额, 乘车日期, ...}]。
+
+        2026-08-07 实测：`GET m.tuniu.com/api/train/order/orderList?d={"pageNo":1,"pageSize":10}`
+        → data.orderList[]（orderId/orderTime/beginTime/productName/productType/status...）。
+        """
+        d = json.dumps({"pageNo": int(page_no), "pageSize": int(page_size)},
+                       ensure_ascii=False, separators=(",", ":"))
+        url = f"{M}/api/train/order/orderList?d={urllib.parse.quote(d)}"
+        j = await self._m_exec(self._m_blueprint("GET", url))
+        if j.get("errorCode") == 710000:
+            return {"ok": True, "orders": (j.get("data") or {}).get("orderList", []), "raw": j}
+        return {"ok": False, "error": j.get("msg") or str(j)[:200], "raw": j}
 
 
 # 便捷入口
@@ -469,12 +476,18 @@ api = TuniuAPI()
 
 if __name__ == "__main__":
     import datetime
-    tm = (datetime.date.today() + datetime.timedelta(days=1)).isoformat()
-    print("工具列表:", api.list_tools("train").get("ok"))
-    r = api.search_train("南京", "北京", tm)
-    if r.get("ok"):
-        d = r.get("data")
-        if isinstance(d, list):
-            for t in d[:3]:
-                print(t.get("trainNum"), t.get("departureTime"), "→", t.get("arrivalTime"),
-                      "硬座:", t.get("price", {}).get("yzPrice", ""))
+
+    async def main():
+        tm = (datetime.date.today() + datetime.timedelta(days=1)).isoformat()
+        print("工具列表:", (await api.list_tools("train")).get("ok"))
+        r = await api.search_train("南京", "北京", tm)
+        if r.get("ok"):
+            d = r.get("data")
+            if isinstance(d, list):
+                for t in d[:3]:
+                    print(t.get("trainNum"), t.get("departureTime"), "→", t.get("arrivalTime"),
+                          "硬座:", t.get("price", {}).get("yzPrice", ""))
+        bp = api.describe_request("search_train", departure="南京", arrival="北京", date=tm)
+        print("蓝图:", json.dumps(bp, ensure_ascii=False)[:300])
+
+    asyncio.run(main())

@@ -20,18 +20,28 @@ _model = None
 
 
 def _load():
-    """懒加载 SentenceTransformer 模型（进程内单例）。"""
+    """懒加载 SentenceTransformer 模型（进程内单例）。
+
+    优先本地目录（cloud/models/bge-small-zh-v1.5）；不存在则从 HuggingFace 自动下载
+    （首次调用，可设 HF_ENDPOINT=https://hf-mirror.com 加速）。
+    """
     global _model
     if _model is not None:
         return _model
     try:
         from sentence_transformers import SentenceTransformer
     except ImportError:
-        logger.warning("sentence-transformers 未安装，向量检索不可用（pip install --user --break-system-packages sentence-transformers）")
+        logger.warning("sentence-transformers 未安装，向量检索不可用（pip install sentence-transformers）")
         return None
     try:
-        _model = SentenceTransformer(MODEL_DIR)
-        logger.info("BGE 向量模型加载完成（%s）", MODEL_DIR)
+        if os.path.isdir(MODEL_DIR):
+            _model = SentenceTransformer(MODEL_DIR)
+            logger.info("BGE 向量模型加载完成（本地 %s）", MODEL_DIR)
+        else:
+            # 服务器无本地模型 → 从 HuggingFace 下载（用镜像可加速）
+            os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+            _model = SentenceTransformer("BAAI/bge-small-zh-v1.5")
+            logger.info("BGE 向量模型从 HuggingFace 下载加载完成")
     except Exception as e:
         logger.warning("BGE 模型加载失败：%s（向量检索降级为不可用）", e)
         _model = None

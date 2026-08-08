@@ -74,6 +74,13 @@ def _load_config():
     if tuniu.get("api_key"):
         _CONFIG["tuniu_api_key"] = str(tuniu["api_key"])
 
+    # 千问 Qwen / 百炼（routes 向量搜索 / vision 共用，与 LLM 同一 key；云端配置键可能是 qwen 或 bailian）
+    qwen = data.get("qwen") or data.get("bailian") or {}
+    if qwen.get("api_key"):
+        _CONFIG["qwen_api_key"] = str(qwen["api_key"])
+        _CONFIG["bailian_api_key"] = str(qwen["api_key"])
+        _CONFIG["vision_api_key"] = str(qwen["api_key"])
+
 
 def get(key: str, default=None):
     """获取配置项（首次调用时加载 config.json）。"""

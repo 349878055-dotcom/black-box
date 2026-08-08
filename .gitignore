@@ -2,6 +2,11 @@
 cloud/config.json
 *.env
 .env*
+# ⚠️ 密码本副本 / 私钥（敏感，绝不入库）
+密钥/
+*.pem
+*.key
+*.p12
 
 # 用户数据 / 对话日志（敏感）
 cloud/cloud_orchestrator/data/
@@ -37,3 +42,11 @@ nohup.out
 .DS_Store
 Thumbs.db
 cloud/models/
+
+# Android 本地配置（SDK 路径，不入库）
+app/local.properties
+
+# 临时截图（验证码等，不入库）
+glyy_captcha.png
+phone_*.png
+*_screen.png

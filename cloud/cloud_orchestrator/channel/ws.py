@@ -1,17 +1,20 @@
 """
 SessionExecutor — WebSocket 执行通道（统一主脑后简化版）。
 
-职责（v2 平台化）：
+职责（v2 平台化 / Device-as-Proxy）：
   - WS 连接建立 → 按 device_id 注册到 DeviceBridge
   - MasterAgent 经 bridge 与客户端交互：ask_user 推送问题 + 等用户输入；
     浏览器指令（navigate/click/fill/read/...）为 App 内置浏览器预留
     （登录/验证码/看页面时人工配合用，主代理不主动驱动）
+  - skill 执行通道：云端下发「请求蓝图」skill_request → 手机直连平台 →
+    回传原始响应 skill_result（第 1 条改造：WS 协议扩展）
   - 收 result → 喂 _pending_result；收 user_input → 喂 _pending_user_input
   - 断开 → 注销 bridge
 """
 import asyncio
 import json
 import logging
+import uuid
 from typing import Any
 
 from fastapi import WebSocket
@@ -33,6 +36,8 @@ class SessionExecutor:
         self._pending_result: asyncio.Future | None = None
         # 等待用户文字输入的 Future（ask_user 暂停-恢复）
         self._pending_user_input: asyncio.Future | None = None
+        # skill 执行通道：req_id → Future（可并发多个 skill_request）
+        self._pending_skill: dict[str, asyncio.Future] = {}
 
     async def start(self):
         """执行循环：收消息 → 处理"""
@@ -60,7 +65,8 @@ class SessionExecutor:
                 from .bridge import bridge
 
                 self.device_id = device_id
-                bridge.register(device_id, self._send_and_wait, self._wait_user_input)
+                bridge.register(device_id, self._send_and_wait, self._wait_user_input,
+                                self.send_skill_request)
 
         elif msg_type == "result":
             if self._pending_result and not self._pending_result.done():
@@ -72,6 +78,27 @@ class SessionExecutor:
 
         elif msg_type == "user_action":
             self.session.context["last_user_action"] = data
+
+        elif msg_type == "skill_result":
+            # 手机回传的 skill 执行结果（第 1 条：skill_request / skill_result 协议）
+            # 字段按方案文档放消息顶层：req_id / ok / status / headers / body / error
+            req_id = str(msg.get("req_id") or data.get("req_id") or "")
+            logger.info("[executor] 收到 skill_result req=%s ok=%s status=%s err=%s",
+                        req_id, msg.get("ok", data.get("ok")),
+                        msg.get("status", data.get("status")),
+                        str(msg.get("error") or data.get("error") or "")[:80])
+            fut = self._pending_skill.pop(req_id, None)
+            if fut and not fut.done():
+                fut.set_result({
+                    "req_id": req_id,
+                    "ok": bool(msg.get("ok", data.get("ok", True))),
+                    "status": msg.get("status", data.get("status")),
+                    "headers": msg.get("headers") or data.get("headers") or {},
+                    "body": msg.get("body", data.get("body", "")),
+                    "error": str(msg.get("error") or data.get("error") or ""),
+                })
+            else:
+                logger.warning("[executor] skill_result 无匹配 req_id=%s", req_id)
 
         elif msg_type == "ping":
             await self._send({"cmd": "pong", "params": {}})
@@ -99,6 +126,46 @@ class SessionExecutor:
         finally:
             self._pending_result = None
 
+    async def send_skill_request(self, payload: dict) -> dict:
+        """下发 skill_request 请求蓝图给手机，阻塞等 skill_result 回传（第 1 条）。
+
+        payload（云端→手机，字段放顶层）：
+          {
+            "skill": "glyy",    # skill 标识（平台）
+            "request": {        # 请求蓝图
+              "method", "url", "headers", "body", "sign_type"
+            },
+            "credential": {     # 本地凭据提示
+              "kind": "bearer|cookie", "target": "glyy|tuniu"
+            }
+          }
+        手机执行后回 skill_result：{req_id, ok, status, headers, body, error}
+        """
+        req_id = str(uuid.uuid4())[:12]
+        msg = {
+            "type": "skill_request",
+            "req_id": req_id,
+            "skill": str(payload.get("skill") or ""),
+            "request": payload.get("request") or {},
+            "credential": payload.get("credential") or {},
+            # 方案②：登录配置随蓝图下发（手机端 LoginCoordinator 据此检测登录信号并接管登录）
+            "login": payload.get("login") or {},
+        }
+        logger.info("[executor] 下发 skill_request req=%s skill=%s url=%s",
+                    req_id, msg["skill"],
+                    str(msg["request"].get("url", ""))[:80])
+        fut = asyncio.get_event_loop().create_future()
+        self._pending_skill[req_id] = fut
+        await self._send(msg)
+        try:
+            result = await asyncio.wait_for(fut, timeout=120)
+            return result if isinstance(result, dict) else {}
+        except asyncio.TimeoutError:
+            return {"ok": False, "error": "手机执行 skill 超时（请确认 App 在线）",
+                    "req_id": req_id}
+        finally:
+            self._pending_skill.pop(req_id, None)
+
     async def _wait_user_input(self, timeout: float = 600) -> str | None:
         """阻塞等待用户在客户端输入文字（ask_user 暂停-恢复）。"""
         self._pending_user_input = asyncio.get_event_loop().create_future()
@@ -121,6 +188,10 @@ class SessionExecutor:
                 pass
         if self._pending_result and not self._pending_result.done():
             self._pending_result.cancel()
+        for req_id, fut in list(self._pending_skill.items()):
+            if not fut.done():
+                fut.cancel()
+        self._pending_skill.clear()
         try:
             get_manager().destroy(self.session.session_id)
         except Exception:

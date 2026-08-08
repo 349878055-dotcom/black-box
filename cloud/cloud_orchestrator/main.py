@@ -4,6 +4,8 @@
 启动：
   cd 个人助理5 && PYTHONPATH=. python -m cloud.cloud_orchestrator.main
 """
+import logging
+
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,6 +13,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import get
 from .api.routes import router as api_router
 from .auth import auth_middleware
+
+# 让 xiami.* 业务 logger（registry/executor/glyy/...）输出到 stderr（含 /tmp/cloud.log）
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    force=True,
+)
 
 app = FastAPI(title="个人助理5 · API 优先云端", version="1.0.0")
 

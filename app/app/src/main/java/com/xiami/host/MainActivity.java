@@ -56,6 +56,48 @@ public class MainActivity extends Activity {
     private static final int PHOTO_REQUEST = 1003;       // 聊天窗口拍照上传
     private Uri photoUri = null;                          // 拍照输出 Uri
 
+    // ── 手机端通用登录交互（方案②：登录在聊天里推送输入框/图形码，同步等用户输入）──
+    // loginLatch 阻塞 LoginCoordinator.run()（子线程），用户输入后 release 返回
+    private java.util.concurrent.CountDownLatch loginLatch = null;
+    private String loginResult = null;
+
+    /** 手机端全权登录的交互宿主：在聊天里推问题/图，同步等用户输入（LoginCoordinator 调）。 */
+    private final LoginCoordinator.Interactor loginInteractor = new LoginCoordinator.Interactor() {
+        @Override
+        public String askText(String title) {
+            return requestLoginInput(title, null);
+        }
+        @Override
+        public String showImageAndAsk(String base64, String title) {
+            return requestLoginInput(title, base64);
+        }
+    };
+
+    /** 在聊天里推登录问题（可选验证码图），阻塞等用户输入，返回输入（用户取消→null）。 */
+    private String requestLoginInput(final String question, final String image) {
+        final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+        runOnUiThread(() -> {
+            loginLatch = latch;
+            loginResult = null;
+            String js = "if(window.__askLogin) window.__askLogin("
+                    + JSONObject.quote(question == null ? "" : question) + ","
+                    + JSONObject.quote(image == null ? "" : image) + ");";
+            try { uiWeb.evaluateJavascript(js, null); } catch (Exception ignore) {}
+        });
+        try {
+            if (!latch.await(120, java.util.concurrent.TimeUnit.SECONDS)) return null;
+        } catch (InterruptedException e) {
+            return null;
+        }
+        return loginResult;
+    }
+
+    /** ui.html 登录输入回传：用户输入后释放 latch（JsBridge.loginInput 调用）。 */
+    void onLoginInput(String value) {
+        loginResult = value == null ? "" : value;
+        if (loginLatch != null) loginLatch.countDown();
+    }
+
     // navigate / refresh 等真加载：挂一次性回调，onPageFinished 后再回执
     private String pendingNavCbId = null;
     private Runnable navTimeoutRunnable = null;
@@ -485,6 +527,8 @@ public class MainActivity extends Activity {
     }
 
     private WebView makeUiWeb() {
+        // 调试机：开启 WebView 远程调试（chrome://inspect / CDP 注入辅助），上线可移除
+        WebView.setWebContentsDebuggingEnabled(true);
         WebView w = new WebView(this);
         WebSettings s = w.getSettings();
         s.setJavaScriptEnabled(true);
@@ -495,12 +539,19 @@ public class MainActivity extends Activity {
         // 点输入框强制弹键盘（不依赖 JS onfocus 时机，兼容部分 ROM WebView 不弹键盘）
         w.setOnTouchListener((v, ev) -> {
             if (ev.getAction() == android.view.MotionEvent.ACTION_UP) {
-                // 焦点在输入框 → 弹键盘；点空白/其它 → 自然收起（syncSoftInput 判断）
+                v.requestFocus();
+                final float y = ev.getY();
                 v.postDelayed(() -> {
                     try {
-                        syncSoftInput(w);
+                        // 点击底部输入区（屏幕下半部）→ 强制弹键盘；否则按焦点自然显隐
+                        if (y > v.getHeight() * 0.5f) {
+                            InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+                            if (imm != null) imm.showSoftInput(v, InputMethodManager.SHOW_FORCED);
+                        } else {
+                            syncSoftInput(w);
+                        }
                     } catch (Exception e) {}
-                }, 200);
+                }, 150);
             }
             return false;
         });
@@ -589,17 +640,25 @@ public class MainActivity extends Activity {
         // 点输入框强制弹键盘（页面 input 点击也能弹）
         w.setOnTouchListener((v, ev) -> {
             if (ev.getAction() == android.view.MotionEvent.ACTION_UP) {
+                v.requestFocus();
                 v.postDelayed(() -> {
                     try {
-                        syncSoftInput(w);
+                        InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+                        if (imm != null) imm.showSoftInput(v, InputMethodManager.SHOW_FORCED);
                     } catch (Exception e) {}
-                }, 200);
+                }, 150);
             }
             return false;
         });
         WebSettings s = w.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
+        s.setDatabaseEnabled(true);
+        s.setJavaScriptCanOpenWindowsAutomatically(true);
+        // 移动 H5（途牛 M 站 / passport 登录页）视口/弹层需要
+        s.setUseWideViewPort(true);
+        s.setLoadWithOverviewMode(true);
+        s.setSupportZoom(false);
         // 浏览器 Cookie 持久化（登录态保留，免重复登录）
         CookieManager cm = CookieManager.getInstance();
         cm.setAcceptCookie(true);
@@ -611,6 +670,39 @@ public class MainActivity extends Activity {
         // 用系统标准 UA（部分网站对自定义 UA 返回空白页）
         // s.setUserAgentString(s.getUserAgentString() + " XiamiHost/0.1");
         w.setWebViewClient(new WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                // 支付：支付宝 scheme（alipays:// / alipay://）→ 直接拉起支付宝 App（桌面弹出）
+                if (url != null && (url.startsWith("alipays://") || url.startsWith("alipay://"))) {
+                    try {
+                        Intent i = Intent.parseUri(url, Intent.URI_INTENT_SCHEME);
+                        startActivity(i);
+                    } catch (Exception e) {
+                        try {
+                            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+                        } catch (Exception ignore) {}
+                    }
+                    return true;
+                }
+                // 其余 URL（含 https 支付宝 H5/途牛收银台）留在 WebView 内加载
+                return super.shouldOverrideUrlLoading(view, url);
+            }
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, android.webkit.WebResourceRequest request) {
+                String url = request != null ? request.getUrl().toString() : null;
+                if (url != null && (url.startsWith("alipays://") || url.startsWith("alipay://"))) {
+                    try {
+                        Intent i = Intent.parseUri(url, Intent.URI_INTENT_SCHEME);
+                        startActivity(i);
+                    } catch (Exception e) {
+                        try {
+                            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+                        } catch (Exception ignore) {}
+                    }
+                    return true;
+                }
+                return super.shouldOverrideUrlLoading(view, request);
+            }
             @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
@@ -886,6 +978,104 @@ public class MainActivity extends Activity {
 
     // ═══════════ JS Bridge（UI → 原生）═══════════
     class JsBridge {
+        /** 第 6 条：执行 skill 请求蓝图（手机直连平台）→ 回调 ui.html __skillResult 回传 skill_result。
+         *  App 内置固定引擎（红线 A：只执行 JSON 配置，绝不下发/执行代码）。 */
+        @JavascriptInterface
+        public void executeSkill(String reqId, String blueprintJson) {
+            new Thread(() -> {
+                final String rid = reqId == null ? "" : reqId;
+                try {
+                    SkillExecutor ex = new SkillExecutor(MainActivity.this);
+                    // 注入登录交互宿主：手机端全权处理登录（方案②），登录时在聊天里推送输入框/图形码
+                    ex.setLoginInteractor(loginInteractor);
+                    String result = ex.execute(blueprintJson);
+                    final String js = "window.__skillResult && window.__skillResult("
+                            + JSONObject.quote(rid) + "," + result + ");";
+                    runOnUiThread(() -> { try { uiWeb.evaluateJavascript(js, null); } catch (Exception ignore) {} });
+                } catch (Exception e) {
+                    final String err = String.valueOf(e.getMessage());
+                    runOnUiThread(() -> {
+                        try {
+                            uiWeb.evaluateJavascript("window.__skillResult && window.__skillResult("
+                                    + JSONObject.quote(rid)
+                                    + ",{\"ok\":false,\"status\":0,\"headers\":{},\"body\":\"\",\"error\":"
+                                    + JSONObject.quote(err) + "});", null);
+                        } catch (Exception ignore) {}
+                    });
+                }
+            }).start();
+        }
+
+        /** 手机端通用登录：用户输入回传（ui.html 登录输入框提交时调用，释放等待 latch）。 */
+        @JavascriptInterface
+        public void loginInput(String value) {
+            onLoginInput(value);
+        }
+
+        /** 第 5 条：打开系统浏览器支付（App 内零收款，支付全流程在第三方收银台）。 */
+        @JavascriptInterface
+        public void openExternal(String url) {
+            try {
+                if (url == null || url.isEmpty()) return;
+                Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(i);
+            } catch (Exception ignore) {}
+        }
+
+        /** 第 4 条：把登录态写入手机本地凭据库（skill, kind=token|cookie|session|api_key, value）。
+         *  第三方登录态只存用户手机本地（用户自己的凭据），云端不聚合。 */
+        @JavascriptInterface
+        public void saveCredential(String skill, String kind, String value) {
+            try {
+                CredentialStore cs = new CredentialStore(MainActivity.this);
+                String v = value == null ? "" : value;
+                if ("token".equals(kind)) cs.setToken(skill, v);
+                else if ("cookie".equals(kind)) cs.setCookie(skill, v);
+                else if ("session".equals(kind)) cs.setSessionId(skill, v);
+                else if ("api_key".equals(kind)) cs.setApiKey(v);
+            } catch (Exception ignore) {}
+        }
+
+        /** 授权中心：返回各平台登录态状态（供 ui.html「授权中心」显示；凭据只在本机，不外传）。
+         *  返回 JSON：{skill: {name, category, kind, authorized}} */
+        @JavascriptInterface
+        public String getCredentials() {
+            try {
+                CredentialStore cs = new CredentialStore(MainActivity.this);
+                org.json.JSONObject out = new org.json.JSONObject();
+                out.put("glyy", authStatus(cs, "glyy", "南京鼓楼医院", "医疗挂号", "token"));
+                out.put("tuniu", authStatus(cs, "tuniu", "途牛旅游", "出行订票", "cookie"));
+                return out.toString();
+            } catch (Exception e) { return "{}"; }
+        }
+
+        private org.json.JSONObject authStatus(CredentialStore cs, String skill,
+                                              String name, String category, String kind) {
+            org.json.JSONObject o = new org.json.JSONObject();
+            try {
+                o.put("name", name);
+                o.put("category", category);
+                o.put("kind", kind);
+                boolean auth;
+                if ("token".equals(kind)) auth = !cs.getToken(skill).isEmpty();
+                else if ("cookie".equals(kind)) auth = !cs.getCookie(skill).isEmpty();
+                else auth = !cs.getSessionId(skill).isEmpty();
+                o.put("authorized", auth);
+            } catch (Exception ignore) {}
+            return o;
+        }
+
+        /** 授权中心：清除指定平台登录态（退出登录）。 */
+        @JavascriptInterface
+        public void clearCredential(String skill) {
+            try {
+                CredentialStore cs = new CredentialStore(MainActivity.this);
+                cs.setToken(skill, ""); cs.setCookie(skill, "");
+                cs.setSessionId(skill, ""); cs.setRefreshToken(skill, "");
+            } catch (Exception ignore) {}
+        }
+
         @JavascriptInterface
         public void executeCmd(String cmd, String paramsJson, String cbId) {
             runOnUiThread(() -> {
@@ -894,7 +1084,7 @@ public class MainActivity extends Activity {
                     String c = cmd == null ? "" : cmd;
                     switch (c) {
                         case "export_cookies": {
-                            // 导出指定网站的登录态 cookies（供云端模拟接口/逆向用）
+                            // 导出当前网页登录态 cookies（用户自己的账号，用于后续请求保持登录）
                             String domain = p.optString("domain", "");
                             if (domain.isEmpty()) {
                                 cbResult(cbId, "{\"ok\":false,\"error\":\"domain empty\"}");
@@ -902,6 +1092,10 @@ public class MainActivity extends Activity {
                             }
                             try {
                                 String cookies = CookieManager.getInstance().getCookie(domain);
+                                // 第 4 条：登录态存手机本地凭据库（tuniu），云端不持有
+                                try {
+                                    new CredentialStore(MainActivity.this).setCookie("tuniu", String.valueOf(cookies));
+                                } catch (Exception ignore) {}
                                 // 同步写一份到 /sdcard/Download/tuniu_cookies.txt（供电脑 adb pull 读取/摸接口）
                                 try {
                                     java.io.File f = new java.io.File("/sdcard/Download/tuniu_cookies.txt");
@@ -1170,6 +1364,30 @@ public class MainActivity extends Activity {
                     Log.w(TAG, "showChat err", e);
                 }
             });
+        }
+
+        /** 保存验证码图片到手机 Download/相册（供用户看图输入图形码；不依赖 WebView 内嵌显示）。 */
+        @JavascriptInterface
+        public void saveCaptchaImage(String dataUri) {
+            try {
+                if (dataUri == null || dataUri.isEmpty()) return;
+                String b64 = dataUri.contains(",") ? dataUri.substring(dataUri.indexOf(",") + 1) : dataUri;
+                byte[] bytes = Base64.decode(b64, Base64.DEFAULT);
+                java.io.File dir = new java.io.File("/sdcard/Download");
+                if (!dir.exists()) dir.mkdirs();
+                java.io.File f = new java.io.File(dir, "glyy_captcha.png");
+                java.io.FileOutputStream fos = new java.io.FileOutputStream(f);
+                fos.write(bytes);
+                fos.close();
+                // 通知相册刷新
+                try {
+                    Intent media = new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE);
+                    media.setData(Uri.fromFile(f));
+                    sendBroadcast(media);
+                } catch (Exception ignore) {}
+            } catch (Exception e) {
+                Log.w(TAG, "saveCaptchaImage err", e);
+            }
         }
 
         /** 弹出软键盘（输入框聚焦时调用；用 SHOW_IMPLICIT，可被系统/空白点击自然收起）。 */

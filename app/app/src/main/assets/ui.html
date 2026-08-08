@@ -54,19 +54,19 @@
   .conv-item .cn { font-size: 13px; font-weight: 600; color: #ececec; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .conv-item .cp { font-size: 11px; color: #9ca3af; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .conv-new { padding: 8px 10px; text-align: center; color: #4a90d9; font-size: 13px; cursor: pointer; border: 1px dashed #3a3a3a; border-radius: 8px; margin: 4px 2px 8px; }
-  .msg { padding: 11px 14px; border-radius: 14px; font-size: 14px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; margin-bottom: 12px; max-width: 88%; }
+  .msg { padding: 13px 16px; border-radius: 14px; font-size: 18px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; margin-bottom: 12px; max-width: 88%; }
   .msg.user { background: #4a90d9; color: #fff; margin-left: auto; border-bottom-right-radius: 4px; }
   .msg.bot { background: #fff; border: 1px solid #ececec; border-bottom-left-radius: 4px; }
-  .msg.sys { background: #fef3c7; color: #92400e; font-size: 13px; text-align: center; max-width: 100%; }
+  .msg.sys { background: #fef3c7; color: #92400e; font-size: 16px; text-align: center; max-width: 100%; }
   .chat-welcome { text-align: center; color: #9ca3af; padding: 60px 0 30px; }
   .chat-welcome h2 { font-size: 20px; color: #333; margin-bottom: 8px; }
   .chat-welcome p { font-size: 13px; }
   .chat-inputbar { padding: 12px 16px; background: #fff; border-top: 1px solid #e5e5e5; }
   .chat-input-inner { max-width: 700px; margin: 0 auto; display: flex; gap: 8px; align-items: center; }
-  .chat-input-inner input[type="text"] { flex: 1; padding: 12px 14px; border-radius: 24px; border: 1px solid #d1d5db; font-size: 15px; outline: none; background: #fff; }
+  .chat-input-inner input[type="text"] { flex: 1; padding: 14px 16px; border-radius: 24px; border: 1px solid #d1d5db; font-size: 19px; outline: none; background: #fff; }
   .attach { width: 40px; height: 40px; border-radius: 50%; border: none; background: #eef3fb; color: #4a90d9; font-size: 24px; line-height: 1; cursor: pointer; flex-shrink: 0; display: flex; align-items: center; justify-content: center; padding: 0; margin: 0; }
   .chat-input-inner input:focus { border-color: #4a90d9; }
-  .chat-input-inner button { padding: 12px 20px; border-radius: 24px; border: none; background: #4a90d9; color: #fff; font-size: 15px; cursor: pointer; }
+  .chat-input-inner button { padding: 14px 22px; border-radius: 24px; border: none; background: #4a90d9; color: #fff; font-size: 17px; cursor: pointer; }
   .chat-input-inner button:disabled { background: #b0c4de; }
   .statusline { max-width: 700px; margin: 0 auto; font-size: 12px; color: #6b7280; padding: 4px 2px 0; }
 
@@ -138,7 +138,7 @@
 
   <!-- 左侧栏（DeepSeek/Gemini 式可收缩：顶部功能 + 会话列表 + 底部用户/设置） -->
   <div class="sidebar" id="sidebar">
-    <div class="side-logo">🤖 虾米<span>云端大脑 · 手机执行</span></div>
+    <div class="side-logo">🤖 虾米<span>生活助手 · 云端大脑 + 手机执行</span></div>
     <!-- 顶部功能（新对话 + Skill市场） -->
     <div class="side-top">
       <div class="side-item" id="mi-new" onclick="newSess()"><span class="ic">✏️</span>新对话</div>
@@ -170,7 +170,7 @@
     <div class="view active" id="chatView">
       <div class="chat-scroll" id="chatScroll">
         <div class="chat-inner" id="chatInner">
-          <div class="chat-welcome" id="chatWelcome"><h2>你好，我是虾米 🤖</h2><p>云端大脑帮你办事：<br>点左上角 ☰ 打开侧边栏，去「Skill市场」挑一个「人」，加载后就是独立窗口；<br>或直接问我。</p></div>
+          <div class="chat-welcome" id="chatWelcome"><h2>你好，我是虾米 🤖</h2><p>你的生活助手：订票/订酒店/挂号/查信息，都能帮你办。<br>点左上角 ☰ 打开侧边栏，去「Skill市场」挑一个「人」，加载后就是独立窗口；<br>或直接问我。</p></div>
         </div>
       </div>
       <div class="statusline" id="taskStatus"></div>
@@ -375,7 +375,10 @@ function saveSessions() {
   } catch (e) {}
 }
 function curSess() {
-  loadSessions();
+  // 首次/内存为空才从 localStorage 加载；否则用内存（appendMsg 刚写入的 img 不被覆盖）
+  if (!S.sessions || typeof S.sessions !== 'object' || Object.keys(S.sessions).length === 0) {
+    loadSessions();
+  }
   return S.sessions[S.activeSessId] || S.sessions['default'];
 }
 function switchSess(id) {
@@ -426,7 +429,10 @@ function openSessFromSkill(skill) {
   showView('chat');
 }
 function renderConvList() {
-  loadSessions();
+  // 内存已有会话则直接用（appendMsg 刚写入的 img 不被 localStorage 覆盖）
+  if (!S.sessions || typeof S.sessions !== 'object' || Object.keys(S.sessions).length === 0) {
+    loadSessions();
+  }
   const box = $('convList');
   if (!box) return;
   const items = Object.values(S.sessions).sort((a,b) => (b.lastAt||0) - (a.lastAt||0));
@@ -486,10 +492,12 @@ function renderChat() {
   const sess = curSess();
   const inner = $('chatInner');
   if (!sess || !sess.messages || !sess.messages.length) {
-    inner.innerHTML = '<div class="chat-welcome"><h2>' + (sess && sess.persona ? '👤 ' + esc(sess.name) : '你好，我是虾米 🤖') + '</h2><p>' + (sess && sess.persona ? '这是独立对话窗口，专门办「' + esc(sess.name) + '」的事。' : '云端大脑帮你办事：点左上角 ☰ 打开侧边栏，去「Skill市场」挑一个「人」，加载后就是独立窗口；或直接问我。') + '</p></div>';
+    inner.innerHTML = '<div class="chat-welcome"><h2>' + (sess && sess.persona ? '👤 ' + esc(sess.name) : '你好，我是虾米 🤖') + '</h2><p>' + (sess && sess.persona ? '这是独立对话窗口，专门办「' + esc(sess.name) + '」的事。' : '你的生活助手：订票/订酒店/挂号/查信息都能帮你办。点左上角 ☰ 打开侧边栏，去「Skill市场」挑一个「人」，加载后就是独立窗口；或直接问我。') + '</p></div>';
   } else {
     inner.innerHTML = sess.messages.map(m => {
-      const imgHtml = m.img ? `<div class="msg-img"><img src="data:image/png;base64,${m.img}" alt="验证码" style="max-width:220px;border-radius:8px;border:1px solid #ddd"></div>` : '';
+      // image 可能已是完整 data URI（云端直传）也可能是纯 base64，统一处理
+      const imgSrc = m.img && m.img.indexOf('data:') === 0 ? m.img : 'data:image/png;base64,' + m.img;
+      const imgHtml = m.img ? `<div class="msg-img"><img src="${imgSrc}" alt="验证码" style="max-width:220px;border-radius:8px;border:1px solid #ddd"></div>` : '';
       return `<div class="msg ${m.who}">${esc(m.text)}${imgHtml}</div>`;
     }).join('');
   }
@@ -527,7 +535,7 @@ async function doLogin(isRegister) {
     setConn('✅ ' + ((r.user||{}).nickname||'用户'));
     $('mi-logout').style.display = 'block';
     showBrowserBtn();
-    appendMsg('bot', '登录成功，我是虾米 🤖\n去左侧「市场」选一个 skill 试试，或直接问我。');
+    appendMsg('bot', '登录成功，我是虾米 🤖 你的生活助手。\n去左侧「市场」选一个 skill 试试，或直接问我（订票/订酒店/挂号/办事）。');
     loadMarket(); loadMe(); startTaskPoll(); connectWS();
     showView('chat');   // 登录后进入聊天主界面
     $('connMsg').textContent = '';
@@ -545,7 +553,7 @@ function doLogout() {
   $('connModal').classList.add('show');
   setConn('未登录');
   $('mi-logout').style.display = 'none';
-  $('chatInner').innerHTML = '<div class="chat-welcome"><h2>你好，我是虾米 🤖</h2><p>云端大脑帮你办事：点左上角 ☰ 打开侧边栏，去「Skill市场」挑一个「人」，加载后就是独立窗口；或直接问我。</p></div>';
+  $('chatInner').innerHTML = '<div class="chat-welcome"><h2>你好，我是虾米 🤖</h2><p>你的生活助手：订票/订酒店/挂号/查信息都能帮你办。点左上角 ☰ 打开侧边栏，去「Skill市场」挑一个「人」，加载后就是独立窗口；或直接问我。</p></div>';
   $('taskStatus').textContent = '';
   loadSessions();
   S.activeSessId = 'default';
@@ -607,11 +615,30 @@ window.__fileChosen = function(name, b64, mime) {
   } catch (e) { appendMsg('bot', '⚠️ 读取文件失败'); }
 };
 
+// ═══ 手机端通用登录交互（方案②：登录在聊天里推送输入框/图形码，本地回传不经过云端 AI）═══
+S.loginWaiting = false;   // 登录输入等待标志：true 时 sendMsg 把输入回传本地登录引擎
+// 原生登录引擎调用：推登录问题（可选验证码图）到聊天，等待用户输入
+window.__askLogin = function(question, image) {
+  S.loginWaiting = true;
+  appendMsg('bot', '❓ ' + (question || '请输入'));
+  if (image) {
+    try { if (window.AndroidBridge) window.AndroidBridge.saveCaptchaImage(image); } catch (e) {}
+    appendMsg('bot', '（请查看上方验证码图片，在下方输入框输入图片上的字符；图片已存「文件管理 → 下载」）', image);
+  }
+  try { if (window.AndroidBridge) window.AndroidBridge.showKeyboard(); } catch (e) {}
+};
+
 async function sendMsg() {
   const msg = $('msg').value.trim(); if (!msg) return;
   if (!S.token) { appendMsg('bot', '⚠️ 请先登录'); return; }
   appendMsg('user', msg);
   $('msg').value = '';
+  // 手机端登录等待中：把输入回传本地登录引擎（不经云端 AI），然后解除等待
+  if (S.loginWaiting) {
+    S.loginWaiting = false;
+    try { if (window.AndroidBridge) window.AndroidBridge.loginInput(msg); } catch (e) {}
+    return;
+  }
   // skill ask_user 等待中：把回复喂给 WS，不再另开一轮 chat
   if (S.waitingAsk && S.ws && S.ws.readyState === 1) {
     S.waitingAsk = false;
@@ -655,7 +682,11 @@ async function refreshTask() {
       $('skProgress').textContent = t.summary || '执行中…';
       $('skCancelBtn').style.display = 'inline-block';
     }
-    if (t.ask && t.status === 'waiting_user') { S.askGate = t.ask; appendMsg('bot', '❓ ' + (t.ask.question||'请回复')); }
+    // ask_user 提问防重：WS 推送(handleCmd)与轮询这里都会到，用 askGate 内容比对只渲染一次
+    if (t.ask && t.status === 'waiting_user') {
+      const askKey = JSON.stringify(t.ask);
+      if (S.askGate !== askKey) { S.askGate = askKey; appendMsg('bot', '❓ ' + (t.ask.question||'请回复')); }
+    }
   } catch (e) {}
 }
 function startTaskPoll() { if (S.timer) clearInterval(S.timer); S.timer = setInterval(refreshTask, 1500); }
@@ -676,6 +707,46 @@ function connectWS() {
 }
 function sendResult(data) { if (S.ws && S.ws.readyState === 1) S.ws.send(JSON.stringify({ type:'result', data })); }
 
+// [第1条] skill 执行通道：skill_request -> 手机直连平台 -> skill_result
+// 临时桥接：JS fetch 直发请求（第 6 条换原生 OkHttp + 本地凭据库）
+function sendSkillResult(reqId, ok, status, headers, body, error) {
+  if (!S.ws || S.ws.readyState !== 1) return;
+  try {
+    S.ws.send(JSON.stringify({ type:'skill_result', req_id: reqId, ok: !!ok,
+      status: status || 0, headers: headers || {}, body: body || '', error: error || '' }));
+  } catch (e) {}
+}
+// 原生 SkillExecutor 回执（第 6 条）：收 skill_result → WS 回传云端
+window.__skillResult = function(reqId, res) {
+  const r = (res && typeof res === 'object') ? res
+    : (() => { try { return JSON.parse(res); } catch(e) { return { ok:false, status:0, headers:{}, body:'', error:'bad result' }; } })();
+  sendSkillResult(reqId, r.ok, r.status, r.headers || {}, r.body || '', r.error || '');
+};
+async function handleSkillRequest(msg) {
+  const reqId = msg.req_id || '';
+  // 第 6 条：优先原生 SkillExecutor（OkHttp 直连 + 本地凭据库 + 签名）
+  if (window.AndroidBridge && window.AndroidBridge.executeSkill) {
+    try { window.AndroidBridge.executeSkill(reqId, JSON.stringify(msg)); return; } catch (e) {}
+  }
+  // 降级：JS fetch（无原生 bridge 的浏览器预览环境）
+  const req = msg.request || {};
+  const fail = (err) => sendSkillResult(reqId, false, 0, {}, '', err || '手机执行失败');
+  try {
+    const headers = Object.assign({}, req.headers || {});
+    const init = { method: String(req.method || 'GET').toUpperCase(), headers };
+    const body = req.body;
+    if (body !== undefined && body !== null && String(body).length > 0) {
+      init.body = (typeof body === 'string') ? body : JSON.stringify(body);
+      if (!headers['Content-Type']) headers['Content-Type'] = 'application/json';
+    }
+    const r = await fetch(req.url, init);
+    const text = await r.text();
+    const respHeaders = {};
+    r.headers.forEach((v, k) => { respHeaders[k] = v; });
+    sendSkillResult(reqId, r.ok, r.status, respHeaders, text, '');
+  } catch (e) { fail(e && e.message || e); }
+}
+
 let cbSeq = 0; const PENDING = {};
 function execCmd(cmd, params) {
   return new Promise(res => {
@@ -688,16 +759,21 @@ window.__cmdResult = function(id, json) {
   if (p) { try { p(JSON.parse(json)); } catch (e) { p({ ok:false }); } delete PENDING[id]; }
 };
 async function handleCmd(msg) {
+  // 第 1 条：skill_request 请求蓝图（云端下发 -> 手机直连平台 -> 回 skill_result）
+  if (msg.type === 'skill_request') { await handleSkillRequest(msg); return; }
   const cmd = msg.cmd, params = msg.params || {};
   if (cmd === 'ask_user') {
     S.waitingAsk = true;
+    // 与 refreshTask 共用 askGate：标记已渲染，避免轮询再插一条重复提问
+    S.askGate = JSON.stringify({ question: String(params.question||'') });
     // 需要看页面/验证码时：提示用顶部 🌐 切浏览器、← 回聊天回复
     const q = String(params.question||'请配合（登录/验证码）');
     const needLook = /验证码|图片|截图|看.*页|在屏幕上|人工/i.test(q);
     const img = params.image || null;
     if (img) {
-      // 云端推了验证码图片 → 直接显示在聊天里，用户看图在输入框回复
-      appendMsg('bot', '❓ ' + q + '\n（请查看上方验证码图片，在下方输入框输入图片上的字符）', img);
+      // 云端推了验证码图片 → 显示在聊天 + 另存一份到手机「Download」目录（保证一定能看到）
+      try { if (window.AndroidBridge) window.AndroidBridge.saveCaptchaImage(img); } catch (e) {}
+      appendMsg('bot', '❓ ' + q + '\n（请查看上方验证码图片，在下方输入框输入图片上的字符；或打开手机「文件管理 → 下载 → glyy_captcha.png」查看）', img);
     } else {
       appendMsg('bot', '❓ ' + q + '\n（' + (needLook ? '点顶部 🌐 看页面/验证码图，再点 ← 回这里' : '请在下方输入框回复') + '后继续）');
     }
@@ -706,6 +782,15 @@ async function handleCmd(msg) {
   }
   // 只切到浏览器界面；真正 loadUrl 由原生 navigate 等 onPageFinished 后回执（避免双重加载）
   if (cmd === 'navigate' && window.AndroidBridge) { window.AndroidBridge.showBrowser(''); showBrowserBtn(); }
+  // 第 5 条：支付跳转 → 系统浏览器第三方收银台（App 内零收款）
+  if (cmd === 'open_external') {
+    const payUrl = String((params && params.url) || '');
+    if (payUrl && window.AndroidBridge && window.AndroidBridge.openExternal) {
+      window.AndroidBridge.openExternal(payUrl);
+      appendMsg('bot', '🔗 已在系统浏览器打开支付页面，请在浏览器完成支付，支付完成后回到本 App 回复我。');
+    }
+    sendResult({ ok:true }); return;
+  }
   let res = { ok:true };
   try {
     res = await execCmd(cmd, params);
@@ -868,19 +953,17 @@ function profileBoxHtml() {
   const rows = PROFILE_FIELDS.map(([k,label,type]) =>
     `<div class="field-row"><label>${label}</label><input id="pf_${k}" type="${type}" value="${esc(p[k]||'')}"></div>`).join('');
   return `<div class="box">
-    <h3>🗂 个人资料中心 <span class="muted" style="font-weight:400">（就诊人信息，挂号/填表自动带入）</span></h3>
+    <h3>🗂 个人资料中心 <span class="muted" style="font-weight:400">（乘车人/就诊人信息，订票/挂号自动带入）</span></h3>
     ${rows}
     <button class="btn small" onclick="saveProfile()">💾 保存到个人资料中心</button>
-    <div class="muted" style="margin-top:6px">存于本机并同步云端；执行「挂号/登录」skill 时自动带入，验证码仍由你看图输入。</div>
+    <div class="muted" style="margin-top:6px">存于本机并同步云端；执行订票/挂号/登录等 skill 时自动带入，验证码仍由你看图输入。</div>
   </div>`;
 }
 async function saveProfile() {
   const p = {};
   PROFILE_FIELDS.forEach(([k]) => { const el = $('pf_'+k); if (el) p[k] = el.value.trim(); });
   localStorage.setItem('xiami_profile', JSON.stringify(p));
-  // 同步云端（备份 + 供主代理自动登录）
-  try { await api('/api/v1/me', { method:'PUT', body: JSON.stringify({ profile: p }) }); }
-  catch (e) { /* 云端同步失败不阻断本地保存 */ }
+  // 用户铁律：个人信息只存本机（localStorage），不传云端聚合
   appendMsg('bot', '✅ 已保存到个人资料中心（' + (p.realname||p.username||'未填') + '）');
   loadMe();
 }
@@ -903,10 +986,51 @@ async function loadMe() {
         <button class="btn small" onclick="saveMe()">保存资料</button>
       </div>
       ${profileBoxHtml()}
+      ${authBoxHtml()}
       <div class="box"><h3>我的 skill（${mine.length}）</h3>
         ${mine.length ? mine.map(s=>`<div style="padding:5px 0">${esc(s.name)} ${skillBadge(s)}</div>`).join('') : '<div class="muted">暂无已接入的 skill</div>'}
       </div>`;
+    loadAuth();
   } catch (e) { $('meBox').innerHTML = '<div class="empty"><b>加载失败</b>' + esc(e.message) + '</div>'; }
+}
+
+// ── 授权中心：已登录第三方平台（glyy/途牛等），按门类展示，skill 调用时自动使用本地凭据 ──
+const AUTH_NAMES = { glyy:'南京鼓楼医院', tuniu:'途牛旅游' };
+const AUTH_SHORT = { glyy:'鼓楼医院', tuniu:'途牛' };
+function authBoxHtml() {
+  return `<div class="box"><h3>🔐 授权中心 <span class="muted" style="font-weight:400">（已登录平台，skill 调用自动使用）</span></h3>
+    <div id="authBox"><div class="muted">加载中…</div></div></div>`;
+}
+function loadAuth() {
+  const box = $('authBox');
+  if (!box) return;
+  if (!window.AndroidBridge || !window.AndroidBridge.getCredentials) { box.innerHTML = '<div class="muted">授权中心暂不可用</div>'; return; }
+  try {
+    const s = JSON.parse(window.AndroidBridge.getCredentials() || '{}');
+    const keys = Object.keys(s);
+    if (!keys.length) { box.innerHTML = '<div class="muted">暂无已接入平台</div>'; return; }
+    const cats = {};
+    keys.forEach(k => { const it = s[k]; (cats[it.category] = cats[it.category] || []).push(Object.assign({skill:k}, it)); });
+    box.innerHTML = Object.keys(cats).map(cat => `
+      <div style="margin-top:8px;font-size:14px;color:#333"><b>${esc(cat)}</b></div>
+      ${cats[cat].map(it => `
+        <div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #f0f0f0;font-size:15px">
+          <span style="flex:1">${esc(it.name)} <span class="badge ${it.authorized?'done':''}" style="font-size:12px">${it.authorized?'✅已授权':'⭕未授权'}</span></span>
+          ${it.authorized
+            ? `<button class="btn small" style="width:auto" onclick="clearAuth('${it.skill}')">退出</button>`
+            : `<button class="btn small" style="width:auto" onclick="gotoAuth('${it.skill}')">去授权</button>`}
+        </div>`).join('')}`).join('');
+  } catch (e) { box.innerHTML = '<div class="muted">授权中心加载失败</div>'; }
+}
+function gotoAuth(skill) {
+  const name = AUTH_NAMES[skill] || skill;
+  appendMsg('bot', '要授权 ' + name + '，请直接对我说「登录' + (AUTH_SHORT[skill]||skill) + '」，我会引导你完成登录并保存授权。');
+  showView('chat');
+}
+function clearAuth(skill) {
+  if (window.AndroidBridge && window.AndroidBridge.clearCredential) window.AndroidBridge.clearCredential(skill);
+  appendMsg('bot', '✅ 已退出 ' + (AUTH_NAMES[skill]||skill) + ' 授权');
+  loadAuth();
 }
 async function saveMe() {
   try {

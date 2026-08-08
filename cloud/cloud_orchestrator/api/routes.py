@@ -219,6 +219,7 @@ def _cos(a: list, b: list) -> float:
 class SkillRunRequest(BaseModel):
     method: str
     params: dict = {}
+    device_id: str = ""   # 传入则走手机通道（手机真实 IP 直连平台）；缺省云端直发
 
 
 @router.get("/api/v1/skills")
@@ -250,5 +251,24 @@ async def api_search_skills(q: str = "", k: int = 3):
 
 @router.post("/api/v1/skills/{skill_id}/run")
 async def api_run_skill(skill_id: str, body: SkillRunRequest):
-    """直接消费 skill：POST /api/v1/skills/{id}/run {method, params}。"""
-    return _skill_registry.run(skill_id, body.method, body.params or {})
+    """直接消费 skill：POST /api/v1/skills/{id}/run {method, params, device_id}。
+    device_id 传入 → 走手机通道（手机真实 IP 直连，登录态用手机凭据库）；缺省 → 云端直发。"""
+    return await _skill_registry.run(skill_id, body.method, body.params or {},
+                                     device_id=body.device_id)
+
+
+@router.post("/api/v1/dev/browser")
+async def dev_browser(body: dict):
+    """调试：向手机内置浏览器下发指令并拿结果（read_frames/click/slider/navigate…）。
+    POST /api/v1/dev/browser {device_id, cmd, params}。"""
+    device_id = str(body.get("device_id", ""))
+    cmd = str(body.get("cmd", ""))
+    params = body.get("params") or {}
+    if not device_id or not cmd:
+        return {"ok": False, "error": "need device_id+cmd"}
+    try:
+        from ..channel.bridge import bridge
+        res = await bridge.send_cmd(device_id, cmd, params)
+        return {"ok": True, "res": res}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}

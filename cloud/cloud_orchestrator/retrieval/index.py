@@ -70,6 +70,10 @@ class RetrievalIndex:
             if cfg.get("web_methods"):
                 methods_map = {**methods_map, **cfg["web_methods"]}
             for mname, minfo in methods_map.items():
+                # system_only（如登录 4 步）不进小纸条：登录由 _ensure_login 代码编排，
+                # AI 无需也不应看到登录方法，避免自行调用导致流程混乱
+                if minfo.get("system_only"):
+                    continue
                 desc = minfo.get("desc", "")
                 params = minfo.get("params") or {}
                 param_str = "，".join(f"{k}={v}" for k, v in params.items())
