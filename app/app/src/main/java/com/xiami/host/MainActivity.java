@@ -21,8 +21,10 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
+import android.net.http.SslError;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
+import android.webkit.SslErrorHandler;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
@@ -102,6 +104,8 @@ public class MainActivity extends Activity {
     private String pendingNavCbId = null;
     private Runnable navTimeoutRunnable = null;
     private static final long NAV_DEFAULT_TIMEOUT_MS = 45000;
+    // 浏览器默认 UA（navigate 切微信 UA 后据此恢复；glyy 老站需微信 UA）
+    private String webViewDefaultUA = "";
 
     // ── 浏览器执行 JS（真实 DOM）──
     static final String READ_JS = """
@@ -545,6 +549,7 @@ public class MainActivity extends Activity {
             // 不依赖任何 JS 状态标记，直接查 DOM 真实状态。
             if (act == android.view.MotionEvent.ACTION_DOWN && ev.getX() > sidebarPx) {
                 try {
+                    Log.d(TAG, "right-tap DOWN x=" + ev.getX() + " > " + sidebarPx + " → 触发 closeSidebar");
                     uiWeb.evaluateJavascript(
                         "(function(){var s=document.getElementById('sidebar');" +
                         "if(s&&s.classList.contains('open')){closeSidebar();}})();", null);
@@ -552,18 +557,10 @@ public class MainActivity extends Activity {
             }
             if (act == android.view.MotionEvent.ACTION_UP) {
                 v.requestFocus();
-                final float y = ev.getY();
-                v.postDelayed(() -> {
-                    try {
-                        // 点击底部输入区（屏幕下半部）→ 强制弹键盘；否则按焦点自然显隐
-                        if (y > v.getHeight() * 0.5f) {
-                            InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
-                            if (imm != null) imm.showSoftInput(v, InputMethodManager.SHOW_FORCED);
-                        } else {
-                            syncSoftInput(w);
-                        }
-                    } catch (Exception e) {}
-                }, 150);
+                // 键盘显隐交给 JS 自然处理：点输入框 → onfocus → showKeyboard() 弹键盘；
+                // 点消息区 / 空白 / 按钮 → syncSoftInput 按 activeElement 判断，非输入框则收起。
+                // （不再用「屏幕下半部就强制弹键盘」的粗暴逻辑，点消息区不再弹键盘。）
+                syncSoftInput(w);
             }
             return false;
         });
@@ -671,6 +668,8 @@ public class MainActivity extends Activity {
         s.setUseWideViewPort(true);
         s.setLoadWithOverviewMode(true);
         s.setSupportZoom(false);
+        // 记录系统默认 UA，供 navigate 切回（glyy 老站用微信 UA，其他站点恢复默认）
+        try { webViewDefaultUA = s.getUserAgentString(); } catch (Exception ignore) { webViewDefaultUA = ""; }
         // 浏览器 Cookie 持久化（登录态保留，免重复登录）
         CookieManager cm = CookieManager.getInstance();
         cm.setAcceptCookie(true);
@@ -722,6 +721,12 @@ public class MainActivity extends Activity {
                     addrEdit.setText(url);
                 }
                 onBrowserPageFinished();
+            }
+            @Override
+            public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) {
+                // glyy 等老站自签名/老 TLS（net::ERR_SSL_VERSION_INTERFERENCE）必须放行，
+                // 与 SkillExecutor 的 trustAll 对齐；仅内置浏览器，不影响系统。
+                try { handler.proceed(); } catch (Exception ignore) {}
             }
         });
         w.setWebChromeClient(new WebChromeClient() {
@@ -1142,7 +1147,93 @@ public class MainActivity extends Activity {
                             if (refHost != null && !refHost.isEmpty()) {
                                 hdrs.put("Referer", "https://" + refHost + "/");
                             }
+                            // 支持自定义 Referer（glyy 网页被云防护 504，需带小程序 servicewechat Referer 才能过防护）
+                            String referer = p.optString("referer", "");
+                            if (!referer.isEmpty()) {
+                                hdrs.put("Referer", referer);
+                            }
+                            // glyy 等老站必需微信 UA（否则服务器挂起/403）；ua=wechat 时切换，
+                            // 非 wechat 一律恢复默认系统 UA（避免残留微信 UA 影响其他站点）
+                            String ua = p.optString("ua", "");
+                            if ("wechat".equals(ua)) {
+                                browserWeb.getSettings().setUserAgentString(
+                                        "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
+                                        + "AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 "
+                                        + "MicroMessenger/8.0.38(0x18002623) NetType/WIFI Language/zh_CN");
+                            } else {
+                                browserWeb.getSettings().setUserAgentString(webViewDefaultUA);
+                            }
                             browserWeb.loadUrl(url, hdrs);
+                            break;
+                        }
+                        case "export_token": {
+                            // 导出当前网页登录态 token（glyy Bearer token）→ 存手机凭据库 CredentialStore。
+                            // 先扫 localStorage 常见 token key；没有再回退 CookieManager 里找 token 字段。
+                            String skill = p.optString("skill", "glyy");
+                            final String domain = p.optString("domain", "");
+                            browserWeb.evaluateJavascript(
+                                "(function(){try{var keys=['access_token','token','userToken','authToken',"
+                                + "'authorization','Authorization'];var found='';var all={};"
+                                + "for(var i=0;i<localStorage.length;i++){var k=localStorage.key(i);"
+                                + "var v=localStorage.getItem(k);if(v&&v.length>0)all[k]=v;}"
+                                + "for(var j=0;j<keys.length;j++){if(all[keys[j]]){found=all[keys[j]];break;}}"
+                                + "return JSON.stringify({found:found,all:all});"
+                                + "}catch(e){return JSON.stringify({found:'',all:{},err:''+e});}})()",
+                                value -> {
+                                    String v = (value == null || value.equals("null")) ? "{}" : value;
+                                    try {
+                                        String raw = v;
+                                        if (raw.length() >= 2 && raw.charAt(0) == '"') {
+                                            raw = new JSONObject("{\"x\":" + raw + "}").getString("x");
+                                        }
+                                        JSONObject o = new JSONObject(raw);
+                                        String tk = o.optString("found", "");
+                                        JSONObject all = o.optJSONObject("all");
+                                        if (tk.isEmpty() && all != null) {
+                                            // 兜底：遍历 localStorage 找含 token 的 key
+                                            java.util.Iterator<String> it = all.keys();
+                                            while (it.hasNext()) {
+                                                String k = it.next();
+                                                String val = all.optString(k, "");
+                                                if (!val.isEmpty() && (k.toLowerCase().contains("token"))) {
+                                                    tk = val; break;
+                                                }
+                                            }
+                                        }
+                                        // 兜底2：cookie 里找 token 字段（glyy 登录态可能放 cookie）
+                                        if (tk.isEmpty() && domain != null && !domain.isEmpty()) {
+                                            String cookies = CookieManager.getInstance().getCookie(domain);
+                                            if (cookies != null) {
+                                                String[] parts = cookies.split(";");
+                                                for (String ck : parts) {
+                                                    String[] kv = ck.trim().split("=", 2);
+                                                    if (kv.length == 2 && (kv[0].toLowerCase().contains("token"))) {
+                                                        tk = kv[1].trim(); break;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if (!tk.isEmpty()) {
+                                            new CredentialStore(MainActivity.this).setToken(skill, tk);
+                                            // 同步写一份到 Download 供排查（登录态仅存本机）
+                                            try {
+                                                java.io.File f = new java.io.File(
+                                                        "/sdcard/Download/" + skill + "_token.txt");
+                                                java.io.FileOutputStream fos = new java.io.FileOutputStream(f);
+                                                fos.write((domain + "\n" + tk).getBytes("UTF-8"));
+                                                fos.close();
+                                            } catch (Exception ignore) {}
+                                            cbResult(cbId, "{\"ok\":true,\"skill\":\"" + skill
+                                                    + "\",\"token_len\":" + tk.length() + "}");
+                                        } else {
+                                            String keys = (all == null) ? "" : all.toString();
+                                            cbResult(cbId, "{\"ok\":false,\"error\":\"no token in localStorage/cookie\","
+                                                    + "\"keys\":" + JSONObject.quote(keys) + "}");
+                                        }
+                                    } catch (Exception e) {
+                                        cbResult(cbId, "{\"ok\":false,\"error\":\"export_token parse err\"}");
+                                    }
+                                });
                             break;
                         }
                         case "check_ready": {
@@ -1490,6 +1581,27 @@ public class MainActivity extends Activity {
             }
             return;
         }
+        // 侧栏打开时：返回键优先收起侧栏（不退出 App）。直接查 DOM 真实状态，不依赖状态同步标记；
+        // 侧栏开着 → closeSidebar() 并消费返回；侧栏关着 → 回调里再走默认退出。
+        Log.d(TAG, "onBackPressed: query sidebar DOM");
+        try {
+            uiWeb.evaluateJavascript(
+                "(function(){var s=document.getElementById('sidebar');" +
+                "if(s&&s.classList.contains('open')){closeSidebar();return 'open';}return 'closed';})();",
+                value -> {
+                    Log.d(TAG, "onBackPressed: sidebar was " + value);
+                    if (!"open".equals(value)) {
+                        runOnUiThread(this::defaultFinish);
+                    }
+                });
+        } catch (Exception e) {
+            Log.d(TAG, "onBackPressed: evaluateJavascript err " + e);
+            super.onBackPressed();
+        }
+    }
+
+    /** onBackPressed 里异步确认侧栏未开后，再走系统默认返回（退出）。 */
+    private void defaultFinish() {
         super.onBackPressed();
     }
 }

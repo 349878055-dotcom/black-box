@@ -181,6 +181,23 @@
       "system_only": false
     },
     {
+      "name": "resolve_city_code",
+      "desc": "查途牛城市代码（下单前可先查出发/到达城市的 cityCode；submit_order 缺代码时也会自动调用，一般无需手动）",
+      "need_login": false,
+      "params": {
+        "city": "城市名（如：南京/镇江/北京）"
+      },
+      "keywords": [
+        "城市代码",
+        "查城市",
+        "citycode",
+        "途牛城市"
+      ],
+      "success_ret": "{ok, city, city_code}",
+      "error_ret": "{ok:false, error}",
+      "system_only": false
+    },
+    {
       "name": "submit_order",
       "desc": "下单创建订单（M站 AddOrder，乘客直传 touristList，免网页添加乘客弹窗）⚠️真购票",
       "need_login": true,

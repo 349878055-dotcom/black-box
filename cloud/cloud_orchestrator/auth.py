@@ -1,51 +1,93 @@
 """
-认证中间件 — JWT Bearer Token 验证
+认证中间件 — 双 Token（Access 短期 JWT 式 + Refresh 长期可吊销）
 
-使用 config.json 中的 auth.api_key 作为共享密钥。
-客户端在登录时从 /api/v1/auth/login 获取 JWT token。
+- Access Token（约 2h）：自研 HMAC 签名，无状态，携带 email+user_id；
+- Refresh Token（约 30 天）：高熵随机串，服务端登记（refresh_tokens.json），可吊销/轮换。
+
+客户端登录后拿到 access + refresh；access 过期用 refresh 换新（refresh 会轮换）；
+登出/改密可吊销 refresh，强制重新登录。
 """
-import time
 import hashlib
 import hmac
-from fastapi import Request, HTTPException
+import time
+from fastapi import Request
 from fastapi.responses import JSONResponse
+
 from .config import get
+from .store.refresh_tokens import refresh_store
+
+ACCESS_TTL = 2 * 3600          # Access 有效期 2 小时
+REFRESH_TTL = 30 * 86400       # Refresh 有效期 30 天
 
 
 def _secret() -> str:
     return get("jwt_secret", "") or "xiamiaban-default-secret"
 
 
-def create_token(email: str) -> str:
-    """生成简单 JWT（非标准 JWT，仅用于内部认证）"""
-    payload = f"email={email}&ts={int(time.time())}&exp={int(time.time()) + 86400 * 7}"
-    sig = hmac.new(_secret().encode(), payload.encode(), hashlib.sha256).hexdigest()[:16]
-    return f"{payload}&sig={sig}"
+def _sign(payload: str) -> str:
+    return hmac.new(_secret().encode(), payload.encode(), hashlib.sha256).hexdigest()[:16]
 
 
-def verify_token(token: str) -> str | None:
-    """验证 token，返回 email 或 None"""
+def create_access_token(email: str, user_id: str = "") -> str:
+    """生成 Access Token（HMAC 签名，无状态）。"""
+    payload = (
+        f"email={email}&uid={user_id}"
+        f"&ts={int(time.time())}&exp={int(time.time()) + ACCESS_TTL}"
+    )
+    return f"{payload}&sig={_sign(payload)}"
+
+
+def verify_token(token: str) -> dict | None:
+    """验证 Access Token，返回 {email, user_id}；无效/过期返回 None。"""
     try:
         parts = token.split("&sig=")
         if len(parts) != 2:
             return None
         payload, sig = parts
-        expected = hmac.new(_secret().encode(), payload.encode(), hashlib.sha256).hexdigest()[:16]
-        if sig != expected:
+        if _sign(payload) != sig:
             return None
-        # 解析 payload
         params = {}
         for kv in payload.split("&"):
             if "=" in kv:
                 k, v = kv.split("=", 1)
                 params[k] = v
-        # 检查过期
         exp = int(params.get("exp", 0))
         if time.time() > exp:
             return None
-        return params.get("email", "")
+        return {"email": params.get("email", ""), "user_id": params.get("uid", "")}
     except Exception:
         return None
+
+
+def create_tokens(email: str, user_id: str = "") -> dict:
+    """登录/注册成功后签发双 token。user_id 缺失时回退 email。"""
+    uid = user_id or email
+    access = create_access_token(email, uid)
+    refresh = refresh_store.create(uid, email, ttl=REFRESH_TTL)
+    return {"access_token": access, "refresh_token": refresh, "user_id": uid}
+
+
+def refresh_access(refresh_token: str) -> dict | None:
+    """用 Refresh Token 换新 Access（并轮换 Refresh）。
+    无效/过期/已吊销返回 None。"""
+    rec = refresh_store.get_valid(refresh_token)
+    if not rec:
+        return None
+    email = rec.get("email", "")
+    uid = rec.get("user_id", "") or email
+    # 轮换：吊销旧 refresh，签发新的一对
+    refresh_store.revoke(refresh_token)
+    return create_tokens(email, uid)
+
+
+def revoke_refresh(refresh_token: str) -> None:
+    """吊销单条 refresh token（登出）。"""
+    refresh_store.revoke(refresh_token)
+
+
+def revoke_all_for_email(email: str) -> None:
+    """吊销某账号全部 refresh token（改密/被踢）。"""
+    refresh_store.revoke_all_for_email(email)
 
 
 async def auth_middleware(request: Request, call_next):
@@ -59,6 +101,8 @@ async def auth_middleware(request: Request, call_next):
         "/health",
         "/api/v1/auth/login",
         "/api/v1/auth/register",
+        "/api/v1/auth/refresh",
+        "/api/v1/auth/logout",
     ]
     if request.url.path in public_paths:
         return await call_next(request)
@@ -75,10 +119,11 @@ async def auth_middleware(request: Request, call_next):
         return JSONResponse(status_code=401, content={"detail": "未提供认证令牌"})
 
     token = auth_header[7:]
-    email = verify_token(token)
-    if not email:
+    info = verify_token(token)
+    if not info:
         return JSONResponse(status_code=401, content={"detail": "认证令牌无效或已过期"})
 
-    # 将用户信息注入请求
-    request.state.user_email = email
+    # 将用户信息注入请求：user_email（兼容既有业务隔离键）+ user_id（新主键）
+    request.state.user_email = info.get("email", "")
+    request.state.user_id = info.get("user_id", "") or info.get("email", "")
     return await call_next(request)

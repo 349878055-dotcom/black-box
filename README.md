@@ -104,11 +104,15 @@ app/                 Android 手机端（对话 UI + 内置浏览器 + 导出登
 
 | skill | 登录态形式 | 从哪来（正确来源） | 要内置浏览器吗 | 现状 |
 |---|---|---|---|---|
-| glyy 鼓楼医院 | Bearer token | **云端 API 短信登录**：get_graphical_captcha → send_sms → login（人输图形验证码 + 短信码） | ❌ 不需要 | ✅ 已实现，待手机实测 |
+| glyy 鼓楼医院 | Bearer token | **内置浏览器自助登录**（2026-08-08 改）：自动弹内置浏览器打开 `https://www.ih.njglyy.com`（微信 UA）→ 客户自己输手机号+短信码登录 → 自动 `export_token` 导出 token 存手机凭据库 | ✅ 需要（微信 UA） | ✅ 已改造，待手机实测 |
 | tuniu 查询 | apiKey | **config.json 配置**（`tuniu.api_key`） | ❌ 不需要 | ✅ 已配置，查询可用 |
 | tuniu 下单 | cookies + sessionId | **网页版**：App 内置浏览器登录 → 导出 cookies；**小程序**：抓包拿 sessionId | ⚠️ 网页版可，小程序不行 | 🔄 需重新获取一次 |
 
-> 说明：glyy 走短信验证码 API 登录（云端直调），完全不需要内置浏览器；途牛查询用 apiKey 免登录；只有途牛下单需要登录态（网页版导出或抓包，一次性获取后持久化复用）。
+> 说明（2026-08-08 用户铁令）：**所有平台登录统一改为「弹内置浏览器 → 客户自己登录 → 自动导出登录态存手机」**，
+> 废弃 glyy 旧的「云端 ask_user 一步步问手机号/图形验证码/短信码」方式。
+> glyy 登录页 `https://www.ih.njglyy.com` 必需微信 UA（navigate 传 `ua=wechat`）；登录后云端下发 `export_token`
+> 命令，手机端从浏览器 localStorage/cookie 读 Bearer token 存 `CredentialStore token_glyy`，后续请求自动补
+> `Authorization: Bearer`。途牛下单同理念（网页版导出 cookie）。
 
 ## 登录态文件（持久化于 data/sessions/，云端重启不丢）
 

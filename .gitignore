@@ -53,4 +53,5 @@ phone_*.png
 
 # ⚠️ 含明文账号/密码（云服务器密码、测试账号），绝不入库
 tools/deploy_cloud.py
+tools/.test_account.txt
 *phone_test_shell.html

@@ -2,6 +2,8 @@
 主 Agent 入口（个人助理5 · skill 消费版）。
 
 串行后台任务：submit → Agent.handle（LLM + skill 工具循环）→ 结果。
+会话（豆包式单用户多会话）：上下文按 (user_id, conversation_id) 隔离，
+消息写入 conversations 存储，多轮记忆 = 该会话历史（不跨会话串扰）。
 ask_user 通过 WS 通道（bridge.send_cmd 推送 + wait_user_input 等回复）与用户交互。
 """
 from __future__ import annotations
@@ -25,6 +27,7 @@ class TaskState:
         self.ask: dict | None = None
         self.error = ""
         self.updated_at = time.time()
+        self.conversation_id = ""   # 任务所属会话（前端按此隔离 reply，防止旧回复串会话）
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -34,16 +37,16 @@ class TaskState:
             "ask": self.ask,
             "error": self.error,
             "updated_at": self.updated_at,
+            "conversation_id": self.conversation_id,
         }
 
 
 class MasterAgent:
     def __init__(self) -> None:
+        # 任务状态仍按 device_id（一台设备同时只跑一个任务）
         self._busy: set[str] = set()
         self._jobs: dict[str, asyncio.Task] = {}
         self._tasks: dict[str, TaskState] = {}
-        # 多轮对话记忆：device_id -> [{role, content}]（user/assistant 文本，含 ask_user 问答）
-        self._history: dict[str, list[dict]] = {}
 
     def get_task(self, device_id: str) -> dict[str, Any]:
         ts = self._tasks.get(device_id)
@@ -57,31 +60,93 @@ class MasterAgent:
         if ts:
             ts.status = "cancelled"
             ts.summary = "已取消"
+        # 真正取消正在跑的 asyncio task（如卡在 ask_user 等用户输入时），
+        # 让 _run 的 finally 释放 _busy，否则后续提交全部 busy（cancel 只改状态不释放）
+        job = self._jobs.get(device_id)
+        if job and not job.done():
+            try:
+                job.cancel()
+            except Exception:
+                pass
 
-    def submit(self, device_id: str, message: str) -> dict[str, Any]:
+    # ── 会话工具（豆包式：会话历史即上下文，按会话隔离）──
+    def _resolve_conv(self, user_id: str, conversation_id: str) -> str:
+        """解析有效会话 ID（无效回退 default）。"""
+        try:
+            from ..store.conversations import conversations
+
+            conv_id = conversation_id or "default"
+            conv = (conversations.get_default(user_id)
+                    if conv_id == "default" else conversations.get(conv_id))
+            if not conv:
+                conv = conversations.get_default(user_id)
+            return conv.conversation_id if conv else (conv_id or "default")
+        except Exception:
+            return conversation_id or "default"
+
+    def _append_conv(self, user_id: str, conversation_id: str, msg: dict) -> None:
+        try:
+            from ..store.conversations import conversations
+
+            conversations.append_message(conversation_id, msg)
+        except Exception:
+            pass
+
+    def _conv_history(self, user_id: str, conversation_id: str, limit: int = 8,
+                      drop_last: int = 1) -> list[dict]:
+        """从会话读上下文；drop_last 排除刚写入的当前用户消息，避免重复。"""
+        try:
+            from ..store.conversations import conversations
+
+            conv = conversations.get(conversation_id)
+            if not conv:
+                conv = conversations.get_default(user_id)
+            if not conv:
+                return []
+            msgs = conv.messages
+            if drop_last and msgs:
+                msgs = msgs[:-drop_last]
+            hist = []
+            for m in msgs:
+                if not m.get("text"):
+                    continue
+                role = "assistant" if m.get("who") == "bot" else "user"
+                hist.append({"role": role, "content": str(m.get("text"))})
+            return hist[-limit:]
+        except Exception:
+            return []
+
+    # ── 任务 ──
+    def submit(self, device_id: str, message: str,
+               user_id: str = "", conversation_id: str = "default") -> dict[str, Any]:
+        raw_conv_id = conversation_id or "default"   # 前端传入的会话 id（如 'default' / uuid）
+        conv_id = self._resolve_conv(user_id, conversation_id)
+        # 用户消息写入会话（更新会话时间/标题）
+        self._append_conv(user_id, conv_id, {"who": "user", "text": message, "at": time.time()})
+
         if device_id in self._busy:
             return {"status": "busy", "task": self.get_task(device_id)}
         self._busy.add(device_id)
         ts = TaskState()
         ts.status = "running"
         ts.summary = f"正在处理：{(message or '')[:40]}"
+        ts.conversation_id = raw_conv_id   # 记录所属会话，前端按此隔离 reply
         self._tasks[device_id] = ts
-        job = asyncio.create_task(self._run(device_id, message))
+        job = asyncio.create_task(self._run(device_id, user_id, conv_id, message))
         self._jobs[device_id] = job
         return {"status": "running", "task": ts.to_dict()}
 
-    async def _run(self, device_id: str, message: str) -> None:
+    async def _run(self, device_id: str, user_id: str, conversation_id: str, message: str) -> None:
         ts = self._tasks.get(device_id)
         try:
-            ask_fn = self._make_ask(device_id)
+            ask_fn = self._make_ask(device_id, user_id, conversation_id)
             agent = Agent(ask_user_fn=ask_fn, device_id=device_id)
-            history = self._history.setdefault(device_id, [])
-            reply = await agent.handle(message, history=history[-8:])
-            # 多轮记忆：记录用户消息 + agent 回复（保留最近 20 条）
-            history.append({"role": "user", "content": message})
+            # 上下文 = 该会话历史（不含当前消息），按会话隔离
+            history = self._conv_history(user_id, conversation_id)
+            reply = await agent.handle(message, history=history)
             if reply:
-                history.append({"role": "assistant", "content": reply})
-            self._history[device_id] = history[-20:]
+                self._append_conv(user_id, conversation_id,
+                                  {"who": "bot", "text": reply, "at": time.time()})
             if ts:
                 ts.status = "done"
                 ts.reply = reply
@@ -99,16 +164,16 @@ class MasterAgent:
         finally:
             self._busy.discard(device_id)
 
-    def _make_ask(self, device_id: str):
+    def _make_ask(self, device_id: str, user_id: str, conversation_id: str):
         async def ask(question: str, image: str | None = None) -> str:
             ts = self._tasks.get(device_id)
             if ts:
                 ts.status = "waiting_user"
                 ts.ask = {"question": str(question)}
                 ts.summary = "等待你回复…"
-            # 多轮记忆：记录 agent 提问
-            self._history.setdefault(device_id, []).append(
-                {"role": "assistant", "content": f"（向你提问）{question}"})
+            # ask 提问记录到会话（bot 视角）
+            self._append_conv(user_id, conversation_id,
+                              {"who": "bot", "text": f"（向你提问）{question}", "at": time.time()})
             # 推送到 App 聊天（image 为验证码图片 base64，App 显示给用户看）
             params: dict = {"question": str(question), "kind": "user_input"}
             if image:
@@ -123,10 +188,9 @@ class MasterAgent:
                 pass
             ans = await bridge.wait_user_input(device_id, timeout=600)
             if ans:
-                # 多轮记忆：记录用户回答（即使走新任务，新 agent 也能接续上下文）
-                self._history.setdefault(device_id, []).append(
-                    {"role": "user", "content": str(ans).strip()})
-                self._history[device_id] = self._history[device_id][-20:]
+                # 用户回答记录到会话（user 视角）
+                self._append_conv(user_id, conversation_id,
+                                  {"who": "user", "text": str(ans).strip(), "at": time.time()})
             if ts:
                 ts.status = "running"
                 ts.ask = None

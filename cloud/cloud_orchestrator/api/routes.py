@@ -12,7 +12,7 @@ import time
 from fastapi import APIRouter, HTTPException, Request, WebSocket
 from pydantic import BaseModel
 
-from ..auth import create_token
+from ..auth import create_tokens, refresh_access, revoke_refresh
 from ..channel.ws import handle_websocket
 from ..channel.session import get_manager
 
@@ -31,8 +31,13 @@ class RegisterRequest(BaseModel):
     nickname: str = ""
 
 
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+
 class ChatRequest(BaseModel):
     message: str
+    session_id: str = ""   # 会话 ID（选填，缺省用 default）
 
 
 class MeUpdate(BaseModel):
@@ -48,6 +53,7 @@ def _my_email(request: Request) -> str:
 
 def _user_view(u) -> dict:
     return {
+        "user_id": u.user_id,
         "email": u.email,
         "nickname": u.nickname or u.email.split("@")[0],
         "bio": u.bio,
@@ -73,9 +79,15 @@ async def login(body: AuthRequest):
         return {"ok": False, "detail": "请填写用户名/邮箱和密码"}
     from ..store.users import users
 
-    user = users.touch(identity)
-    token = create_token(identity)
-    return {"access_token": token, "user_id": identity, "user": _user_view(user)}
+    user = users.get(identity)
+    if not user:
+        return {"ok": False, "detail": "账号不存在，请先注册"}
+    if user.status != "active":
+        return {"ok": False, "detail": "账号已停用"}
+    if not users.verify_password(identity, password):
+        return {"ok": False, "detail": "邮箱或密码错误"}
+    tokens = create_tokens(user.email, user.user_id)
+    return {"ok": True, **tokens, "user": _user_view(user)}
 
 
 @router.post("/api/v1/auth/register")
@@ -88,12 +100,30 @@ async def register(body: RegisterRequest):
         return {"ok": False, "detail": "密码至少 6 位"}
     if password != body.password_confirm.strip():
         return {"ok": False, "detail": "两次输入的密码不一致"}
-    from ..store.users import User, users
+    from ..store.users import users
 
+    if users.get(email):
+        return {"ok": False, "detail": "该邮箱已注册，请直接登录"}
     nickname = (body.nickname or "").strip() or email.split("@")[0]
-    user = users.upsert(User(email=email, nickname=nickname))
-    token = create_token(email)
-    return {"access_token": token, "user_id": email, "user": _user_view(user)}
+    user = users.register(email, password, nickname)
+    tokens = create_tokens(user.email, user.user_id)
+    return {"ok": True, **tokens, "user": _user_view(user)}
+
+
+@router.post("/api/v1/auth/refresh")
+async def refresh(body: RefreshRequest):
+    """用 Refresh Token 换新 Access（并轮换 Refresh）。"""
+    out = refresh_access((body.refresh_token or "").strip())
+    if not out:
+        raise HTTPException(status_code=401, detail="刷新令牌无效或已过期")
+    return {"ok": True, **out}
+
+
+@router.post("/api/v1/auth/logout")
+async def logout(body: RefreshRequest):
+    """登出：吊销 refresh token（客户端本地再清 token）。"""
+    revoke_refresh((body.refresh_token or "").strip())
+    return {"ok": True}
 
 
 # ═══════════════════ 对话 / 任务 ═══════════════════
@@ -107,7 +137,9 @@ async def chat(request: Request, body: ChatRequest):
     from ..core.master import master
 
     device_id = _my_email(request) or "anon"
-    out = master.submit(device_id, msg)
+    user_id = getattr(request.state, "user_id", "") or device_id
+    conv_id = (body.session_id or "").strip() or "default"
+    out = master.submit(device_id, message=msg, user_id=user_id, conversation_id=conv_id)
     return {"status": "ok", "task": out.get("task")}
 
 
@@ -124,6 +156,98 @@ async def cancel_task(request: Request):
 
     master.cancel(_my_email(request))
     return {"status": "ok", "message": "已请求取消"}
+
+
+# ═══════════════════ 会话管理（豆包式单用户多会话）═══════════════════
+
+class ConvCreate(BaseModel):
+    type: str = "chat"        # chat / skill
+    persona: dict = {}
+
+
+class ConvUpdate(BaseModel):
+    title: str | None = None
+    pinned: bool | None = None
+
+
+def _me_ids(request: Request):
+    email = _my_email(request)
+    user_id = getattr(request.state, "user_id", "") or email
+    return email, user_id
+
+
+def _own_conv(request: Request, conv_id: str):
+    """取归属当前用户的会话；default 自动创建。无权限抛 404。"""
+    from ..store.conversations import conversations
+
+    _, user_id = _me_ids(request)
+    if conv_id == "default":
+        conv = conversations.get_default(user_id)
+    else:
+        conv = conversations.get(conv_id)
+    if not conv or conv.user_id != user_id:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    return conv
+
+
+@router.get("/api/v1/conversations")
+async def list_conversations(request: Request):
+    from ..store.conversations import conversations
+
+    _, user_id = _me_ids(request)
+    conversations.get_default(user_id)  # 确保 default 存在
+    lst = conversations.list_by_user(user_id)
+    # 列表轻量返回（不含 messages）
+    return {"ok": True, "conversations": [
+        {k: v for k, v in c.to_dict().items() if k != "messages"} for c in lst
+    ]}
+
+
+@router.post("/api/v1/conversations")
+async def create_conversation(request: Request, body: ConvCreate):
+    from ..store.conversations import conversations
+
+    _, user_id = _me_ids(request)
+    conv = conversations.create(user_id, type=body.type or "chat", persona=body.persona or {})
+    return {"ok": True, "conversation": conv.to_dict()}
+
+
+@router.get("/api/v1/conversations/{conv_id}/messages")
+async def get_conv_messages(request: Request, conv_id: str):
+    conv = _own_conv(request, conv_id)
+    return {"ok": True, "conversation": conv.to_dict()}
+
+
+@router.put("/api/v1/conversations/{conv_id}")
+async def update_conversation(request: Request, conv_id: str, body: ConvUpdate):
+    from ..store.conversations import conversations
+
+    _own_conv(request, conv_id)
+    if body.title is not None:
+        conversations.set_title(conv_id, body.title)
+    if body.pinned is not None:
+        conversations.set_pinned(conv_id, body.pinned)
+    return {"ok": True}
+
+
+@router.post("/api/v1/conversations/{conv_id}/clear")
+async def clear_conversation(request: Request, conv_id: str):
+    from ..store.conversations import conversations
+
+    _own_conv(request, conv_id)
+    conversations.clear_messages(conv_id)
+    return {"ok": True}
+
+
+@router.delete("/api/v1/conversations/{conv_id}")
+async def delete_conversation(request: Request, conv_id: str):
+    from ..store.conversations import conversations
+
+    _own_conv(request, conv_id)
+    if conv_id == "default":
+        return {"ok": False, "detail": "默认会话不可删除"}
+    conversations.delete(conv_id)
+    return {"ok": True}
 
 
 # ═══════════════════ 个人资料中心 ═══════════════════

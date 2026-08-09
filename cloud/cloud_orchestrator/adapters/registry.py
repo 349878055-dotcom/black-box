@@ -112,10 +112,10 @@ async def run(skill: str, method: str, params: dict | None = None, device_id: st
     """
     cfg = ADAPTERS.get(skill or "")
     if not cfg:
-        return {"ok": False, "error": f"skill 不存在：{skill or '空'}"}
+        return {"ok": False, "error": f"才艺不存在：{skill or '空'}"}
     methods_map = cfg["methods"]
     if method not in methods_map:
-        return {"ok": False, "error": f"skill {skill} 无方法：{method}"}
+        return {"ok": False, "error": f"才艺 {skill} 无方法：{method}"}
     # 第 7 条降级兜底：带 device_id（App 主代理路径）但手机离线 → 不执行也不云端直发
     if device_id:
         try:
@@ -134,7 +134,7 @@ async def run(skill: str, method: str, params: dict | None = None, device_id: st
         executor = _make_executor(device_id) if device_id else None
         inst = _get_instance(skill, executor)
         if inst is None:
-            return {"ok": False, "error": f"skill {skill} 适配器加载失败"}
+            return {"ok": False, "error": f"才艺 {skill} 适配器加载失败"}
         fn = getattr(inst, method)
         data = await fn(**(params or {}))
         # 登录态缺失/失效 → 返回 need_login 标记（供主代理自动触发登录）

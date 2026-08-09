@@ -22,11 +22,11 @@ logger = logging.getLogger("xiami.agent")
 
 SYSTEM_PROMPT = """你是「生活助手」，帮用户解决日常生活里的大小事：订火车票/机票/酒店、景点门票、医院挂号、查信息、办事等。
 
-办事方式 = 执行 skill（平台逆向 API，直接调 HTTP 接口，不是模拟点击/开网页）：
+办事方式 = 执行才艺（平台能力，直接调 HTTP 接口，不是模拟点击/开网页）：
 1. 系统已按你的话自动检索出「当前平台 + 最相关方法」给你（小纸条），
    **只在小纸条列出的方法里选**，不要用没列出的方法；若小纸条给了备选平台且客户意图
    明显是别的平台，再 skill_run 前用 skill_list 看看那个平台；
-2. 用 skill_run(skill, method, params) 执行 skill 方法，拿真实数据，绝不编造；
+2. 用 skill_run(skill, method, params) 执行才艺方法，拿真实数据，绝不编造；
 3. 需要用户提供信息（验证码、手机号、确认等）→ 用 ask_user；
 4. 查通用信息（新闻/政策/电话/价格）→ 用 web_search；
 5. 需要精确当前时间（现在几点/上午下午/距某时刻还有多久/判断是否来得及）→
@@ -40,10 +40,10 @@ SYSTEM_PROMPT = """你是「生活助手」，帮用户解决日常生活里的�
 按描述办事，不要自行发明平台不存在的下单步骤。
 
 铁律：
-- 图形验证码由 skill 方法获取，通过图片推送到 App 让用户看图输入（验证码真人配合）；
+- 图形验证码由才艺方法获取，通过图片推送到 App 让用户看图输入（验证码真人配合）；
 - 账号密码已由个人资料中心自动带入（skill_run 调登录方法时自动填），
   不要 ask_user 要账号密码；只有真的缺少（个人资料没存）才问；
-- 登录态获取**优先「手机号+短信验证码」纯 skill 方式**（客户只收短信填码，最省事）；
+- 登录态获取**优先「手机号+短信验证码」纯才艺方式**（客户只收短信填码，最省事）；
   只有平台不支持手机验证码（如仅微信扫码/OAuth/一键登录）才引导客户在 App 内置浏览器
   完成登录并导出登录态到手机（客户点点点，云端不持有）；
 - 真提交（下单/挂号/注册/支付）有副作用，提交前必须 ask_user 明确确认；
@@ -58,9 +58,9 @@ def _tool(name: str, desc: str, props: dict, required: list[str] | None = None) 
 
 
 TOOL_SPECS = [
-    _tool("skill_list", "列出已接入的 skill（平台逆向 API）及可用方法（含是否需要登录）", {}),
-    _tool("skill_run", "执行 skill 方法办理业务（返回结构化数据）",
-          {"skill": {"type": "string", "description": "skill 标识（平台），如 glyy"},
+    _tool("skill_list", "列出已接入的才艺（平台能力）及可用方法（含是否需要登录）", {}),
+    _tool("skill_run", "执行才艺方法办理业务（返回结构化数据）",
+          {"skill": {"type": "string", "description": "才艺标识（平台），如 glyy"},
            "method": {"type": "string", "description": "方法名（见 skill_list）"},
            "params": {"type": "object", "description": "方法参数"}},
           ["skill", "method"]),
@@ -263,61 +263,46 @@ class Agent:
         return False
 
     async def _login_glyy(self, phone: str = "") -> bool:
-        """glyy 自动登录：图形验证码→短信码→login（全部走手机通道，token 手机回写）。
+        """glyy 登录：内置浏览器自助（用户 2026-08-08 铁令：所有平台登录统一内置浏览器，仅此一种方式）。
 
-        铁律（用户 2026-08-06）：glyy 一切请求走手机通道（云端组装蓝图→手机直连→回传解析），
-        禁止云端 requests/curl 直连 glyy。
+        流程（云端不持有登录态，全程手机本地）：
+          1) send_cmd("navigate") → App 自动切到内置浏览器，打开 glyy 登录页（微信 UA）；
+          2) 客户真人操作：页面输手机号 → 收短信验证码 → 填码完成登录；
+          3) 客户回复「已登录」→ 云端 send_cmd("export_token") → App 导出登录态存手机凭据库；
+          4) 之后业务请求由手机 SkillExecutor 自动补 Authorization: Bearer <token>。
+
+        铁律：glyy 一切请求走手机通道；登录态只存手机本地，云端不持有。
         """
-        if not phone:
-            phone = (await self._ask("登录鼓楼医院需要手机号，请输入您的手机号")).strip()
-        if not phone:
-            return False
         try:
-            from ..adapters.registry import _make_executor
-            from ..adapters.glyy_api import GlyyAPI
-            # 图形码/短信/login 统一走手机通道（device_id 在线时注入 executor）
-            api = GlyyAPI(executor=_make_executor(self.device_id)) if self.device_id else GlyyAPI()
-            # 1. 图形验证码（手机直连，图片 base64 推送 App 让用户看）
-            r = await api.get_graphical_captcha(phone)
-            img = ""
-            if isinstance(r, dict):
-                img = str(r.get("image_base64") or "")
-                if not img and isinstance(r.get("data"), dict):
-                    img = str(r["data"].get("image_base64") or "")
-            logger.info("glyy 图形码获取结果 ok=%s img长度=%d keys=%s",
-                        bool(r.get("ok")), len(img), list((r or {}).keys())[:8])
-            if not img:
-                logger.warning("glyy 获取图形验证码失败: %s", r)
-                await self._ask(f"图形验证码获取失败：{(r or {}).get('error') or '手机通道未响应'}。请确认 App 在线后重试。")
-                return False
-            gcode = (await self._ask("请查看上方验证码图片，输入图形验证码", img)).strip()
-            if not gcode:
-                return False
-            # 2. 发送短信验证码（手机通道）
-            r2 = await api.send_sms(phone=phone, gcode=gcode)
-            if not r2.get("ok"):
-                msg = str(r2.get("error") or "发送失败")
-                logger.warning("glyy 发送短信失败: %s", msg)
-                # 图形验证码错误（code=30023）→ 提示重新获取；短信未过验证码环节直接返回
-                if str(r2.get("code")) == "30023":
-                    await self._ask("图形验证码输入错误，请重新开始登录。")
-                return False
-            # 3. 短信验证码 → login（手机执行 + store 回写 token 到手机）
-            code = (await self._ask("短信已发送，请尽快输入收到的短信验证码（验证码有效期很短）")).strip()
-            if not code:
-                return False
-            r3 = await adapters.run("glyy", "login", {"phone": phone, "code": code},
-                                    device_id=self.device_id)
-            logger.info("glyy 登录结果: %s", r3)
-            if not r3.get("ok"):
-                err = str((r3.get("data") or {}).get("error") or r3.get("error") or "登录失败")
-                # code=30004 → 手机号或验证码有误（多半是验证码过期/填错）→ 让用户重试登录
-                await self._ask(f"登录失败：{err}。短信验证码有效期很短，请收到后尽快输入；"
-                                f"若已过期，请说「重新登录鼓楼医院」。")
-                return False
+            from ..channel.bridge import bridge
+            # 1) 自动弹出内置浏览器打开 glyy 登录页（微信 UA，老站必须否则挂起）
+            if self.device_id:
+                try:
+                    await bridge.send_cmd(self.device_id, "navigate",
+                                          {"url": "https://www.ih.njglyy.com",
+                                           "ua": "wechat", "login_skill": "glyy",
+                                           # 网页版需小程序 servicewechat Referer 才能过云防护（否则 504 源站不可达）
+                                           "referer": "https://servicewechat.com/wx74a991a2ae77468d/330/page-frame.html"})
+                except Exception as e:
+                    logger.warning("glyy navigate 打开登录页失败: %s", e)
+            # 2) 引导真人操作（手机号 + 短信验证码，网页内完成，不经过云端 AI）
+            await self._ask(
+                "已在内置浏览器打开鼓楼医院登录页：\n"
+                "1. 在页面输入你的手机号\n"
+                "2. 接收短信验证码并填入，完成登录\n"
+                "完成后回复「已登录」，我会自动保存登录态继续办事。"
+            )
+            # 3) 客户说「已登录」→ 自动导出登录态（Bearer token）存手机凭据库
+            if self.device_id:
+                try:
+                    res = await bridge.send_cmd(self.device_id, "export_token",
+                                                {"skill": "glyy", "domain": "https://www.ih.njglyy.com"})
+                    logger.info("glyy export_token: %s", str(res)[:200])
+                except Exception as e:
+                    logger.warning("glyy export_token 失败: %s", e)
             return True
         except Exception as e:
-            logger.warning("glyy 自动登录异常: %s", e)
+            logger.warning("glyy 浏览器登录引导异常: %s", e)
             return False
 
     async def _login_tuniu(self, phone: str = "") -> bool:

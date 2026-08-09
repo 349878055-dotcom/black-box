@@ -21,7 +21,7 @@ logger = logging.getLogger("xiami.tuniu")
 
 M = "https://m.tuniu.com"                  # ② M 站（网页）
 MAPI = "https://api.tuniu.com"             # ② M 站接口
-CITY_CODES = {"上海": "2500", "苏州": "1615"}  # 途牛城市代码（实测确认；其余待补）
+from .city_data import CITY_CODES  # 途牛 城市→cityCode 完整映射（989 城，2026-08-08 从途牛 M 站数据集提取）
 M_UA = ("Mozilla/5.0 (Linux; Android 12; Pixel 5) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36")
 
@@ -84,12 +84,52 @@ class OrderMixin:
         return {"ok": True, "cookies_set": len(self.cookies),
                 "note": "手机通道下 Cookie 由手机本地凭据库自动补（本方法仅云端直发降级用）"}
 
+    def _city_code(self, city: str) -> str | None:
+        """纯同步查：城市名 → 途牛 cityCode（静态 989 城表 + 别名匹配 + 写回缓存）。查不到返回 None。"""
+        city = (city or "").strip()
+        if not city:
+            return None
+        code = CITY_CODES.get(city)
+        if code:
+            return code
+        alias = city.replace("市", "").replace("省", "").replace("自治区", "") \
+                    .replace("特别行政区", "").replace("地区", "").replace("自治州", "")
+        code = CITY_CODES.get(alias)
+        if code:
+            CITY_CODES[city] = code   # 缓存：后续直接命中
+            return code
+        return None
+
+    async def resolve_city_code(self, city: str) -> dict:
+        """查途牛城市代码（「查城市代码」工具，异步接口）：city=城市名 → {ok, city, city_code}。
+
+        静态映射表覆盖 989 城（2026-08-08 从途牛 M 站完整数据集提取，见 city_data.py）；
+        表内没有时自动去掉「市/省/自治区/地区/自治州」后缀再匹配；查到的会写回 CITY_CODES 缓存。
+        AI 可主动调用；submit_order 内部也会在缺代码时自动调用（无需为每个城市写死）。
+        """
+        code = self._city_code(city)
+        if code is None:
+            return {"ok": False,
+                    "error": f"途牛城市代码表未收录「{(city or '').strip()}」，请确认是否为途牛支持的火车票城市",
+                    "available_city_count": len(CITY_CODES)}
+        return {"ok": True, "city": (city or "").strip(), "city_code": code, "source": "static"}
+
+    def _ensure_city_codes(self, dep: str, arr: str) -> dict:
+        """确保出发/到达城市代码都在表中（缺则自动调查城市代码补齐，方式②）。"""
+        for name in (dep, arr):
+            if self._city_code(name) is None:
+                return {"ok": False, "error": f"途牛城市代码表未收录「{name}」"}
+        return {"ok": True,
+                "departure_city_code": CITY_CODES.get(dep, ""),
+                "arrival_city_code": CITY_CODES.get(arr, "")}
+
     async def _resolve_train(self, departure: str, arrival: str, date: str) -> dict:
         """私有：下单前从 M 站 ticketList 取车次/席别参数（resId/seatId/price/站点代码）。"""
+        # 方式②：缺城市代码 → 自动调「查城市代码」补齐，不再直接报错
+        ok = self._ensure_city_codes(departure, arrival)
+        if not ok.get("ok"):
+            return {"ok": False, "error": ok.get("error")}
         dc, ac = CITY_CODES.get(departure, ""), CITY_CODES.get(arrival, "")
-        if not (dc and ac):
-            return {"ok": False,
-                    "error": f"未内置城市代码：{departure}/{arrival}，请在 skills/tuniu/order.py 的 CITY_CODES 补充"}
         d = json.dumps({
             "ticketType": 0, "departureCityCode": dc, "arrivalCityCode": ac,
             "departureCityName": departure, "arrivalCityName": arrival,
