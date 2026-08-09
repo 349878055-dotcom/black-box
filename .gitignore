@@ -1,5 +1,61 @@
-# 敏感密钥文件 - 绝不上传
-账号密钥汇总.md
+# ⚠️ 密钥 / 配置（绝不入库）
+cloud/config.json
+*.env
+.env*
+# ⚠️ 密码本副本 / 私钥（敏感，绝不入库）
+密钥/
 *.pem
 *.key
-*密钥*
+*.p12
+
+# 用户数据 / 对话日志（敏感）
+cloud/cloud_orchestrator/data/
+*flows*.jsonl
+
+# 个人信息测试页
+*孟凡青*.html
+*预约完成*.html
+
+# 构建产物（Android）
+app/app/build/
+app/build/
+**/.gradle/
+**/build/intermediates/
+**/build/outputs/
+*.apk
+*.aab
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+
+# 临时 / 日志
+*.log
+nohup.out
+*.tmp
+/tmp/
+
+# 系统
+.DS_Store
+Thumbs.db
+cloud/models/
+
+# Android 本地配置（SDK 路径，不入库）
+app/local.properties
+
+# 临时截图（验证码等，不入库）
+glyy_captcha.png
+phone_*.png
+*_screen.png
+
+# ⚠️ 含明文账号/密码（云服务器密码、测试账号），绝不入库
+tools/deploy_cloud.py
+tools/.test_account.txt
+*phone_test_shell.html
+
+# ⚠️ 账号密钥汇总（绝密，绝不入库）
+账号密钥汇总.md
+*密钥汇总*.md
