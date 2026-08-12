@@ -80,14 +80,28 @@ class RetrievalIndex:
                 # 检索关键词（用户常见说法）→ 让"挂个号/查报告/买票"等命中
                 kws = minfo.get("keywords") or []
                 kw_str = "、".join(kws) if kws else ""
+                # 前置依赖（requires）→ 告诉 LLM 参数从哪个方法拿（原子化 + 前置依赖）
+                reqs = [r for r in (minfo.get("requires") or []) if isinstance(r, dict)]
+                req_str = "；".join(f"{r.get('param', '')}←{r.get('from', '')}.{r.get('field', '')}"
+                                    for r in reqs) if reqs else ""
+                # 提供编码（provides）→ 点破源头方法返回哪些编码给谁用
+                provs = minfo.get("provides") or {}
+                prov_str = "、".join(k for k in provs.keys()) if provs else ""
                 # 找所属流程步骤
                 step_title = ""
                 for f in flow:
                     if mname in (f.get("methods") or []):
                         step_title = f.get("title", "")
                         break
+                extra = []
+                if req_str:
+                    extra.append(f"前置依赖：{req_str}（先调这些方法拿真实编码，禁止编造）")
+                if prov_str:
+                    extra.append(f"提供编码：{prov_str}（供后续方法使用）")
                 method_text = (f"{name}（{pid}）的「{mname}」功能：{desc}。"
                                f"用户常这样说：{kw_str}。参数：{param_str}。属于流程步骤：{step_title}")
+                if extra:
+                    method_text += "。" + "。".join(extra)
                 method_items.append({
                     "platform": pid,
                     "method": mname,
@@ -97,6 +111,7 @@ class RetrievalIndex:
                         "need_login": bool(minfo.get("need_login")),
                         "params": params,
                         "step": step_title,
+                        "requires": reqs,
                     },
                 })
         return platform_items, method_items
@@ -191,7 +206,12 @@ class RetrievalIndex:
         for m in methods:
             info = m["info"]
             params = "，".join(f"{k}={v}" for k, v in info["params"].items()) or "无"
-            lines.append(f"- {m['method']}：{info['desc']}（需登录：{'是' if info['need_login'] else '否'}，参数：{params}）")
+            dep = ""
+            reqs = info.get("requires") or []
+            if reqs:
+                dep = "；前置依赖：" + "、".join(f"{r.get('param', '')}←{r.get('from', '')}"
+                                              for r in reqs if isinstance(r, dict))
+            lines.append(f"- {m['method']}：{info['desc']}（需登录：{'是' if info['need_login'] else '否'}，参数：{params}{dep}）")
         # 平台流程地图
         from ..adapters.registry import ADAPTERS
         cfg = ADAPTERS.get(top_skill)
@@ -227,7 +247,12 @@ class RetrievalIndex:
         for m in methods:
             info = m["info"]
             params = "，".join(f"{k}={v}" for k, v in info["params"].items()) or "无"
-            lines.append(f"- {m['method']}：{info['desc']}（需登录：{'是' if info['need_login'] else '否'}，参数：{params}）")
+            dep = ""
+            reqs = info.get("requires") or []
+            if reqs:
+                dep = "；前置依赖：" + "、".join(f"{r.get('param', '')}←{r.get('from', '')}"
+                                              for r in reqs if isinstance(r, dict))
+            lines.append(f"- {m['method']}：{info['desc']}（需登录：{'是' if info['need_login'] else '否'}，参数：{params}{dep}）")
         if cfg.get("flow"):
             lines.append("【流程地图】" + " → ".join(f.get("title", "") for f in cfg["flow"]))
         lines.append(f"【备选平台】其它平台（如客户意图明显不符可切换）")

@@ -1,8 +1,12 @@
 """途牛 · M 站交易模块（m.tuniu.com，需登录 cookie）。
 
-负责「买」：submit_order（AddOrder，乘客直传 touristList，免网页"添加乘客"弹窗）→ pay
-（支付拉起支付宝 App）→ order_detail / order_list（订单确认/查询）→ cancel_order（退票）。
+负责「买」：train_booking_info（原子查询：车次下单编码）→ resolve_city_code（城市码）
+→ submit_order（AddOrder，原子终结点，乘客直传 touristList）→ pay（支付拉起支付宝 App）
+→ order_detail / order_list（订单确认/查询）→ cancel_order（退票）。
 走手机通道（executor，cookie 由手机凭据库补）或云端直发降级。
+
+原子化原则（2026-08-08 重构）：submit_order 不再内部自动连串查码，
+前置编码由 train_booking_info / resolve_city_code 提供，缺则返回错误（由调用方补齐）。
 
 关键点（2026-08-07 实测，AddOrder 下单成功）：
 - 下单必须登录（cookie：isLogined/ssoUser/muser/tuniuuser_id）；
@@ -105,7 +109,7 @@ class OrderMixin:
 
         静态映射表覆盖 989 城（2026-08-08 从途牛 M 站完整数据集提取，见 city_data.py）；
         表内没有时自动去掉「市/省/自治区/地区/自治州」后缀再匹配；查到的会写回 CITY_CODES 缓存。
-        AI 可主动调用；submit_order 内部也会在缺代码时自动调用（无需为每个城市写死）。
+        AI 可主动调用；submit_order 缺城市代码时需先调本方法补齐。
         """
         code = self._city_code(city)
         if code is None:
@@ -115,7 +119,7 @@ class OrderMixin:
         return {"ok": True, "city": (city or "").strip(), "city_code": code, "source": "static"}
 
     def _ensure_city_codes(self, dep: str, arr: str) -> dict:
-        """确保出发/到达城市代码都在表中（缺则自动调查城市代码补齐，方式②）。"""
+        """确保出发/到达城市代码都在表中（静态表查，非接口连串）。缺则报错。"""
         for name in (dep, arr):
             if self._city_code(name) is None:
                 return {"ok": False, "error": f"途牛城市代码表未收录「{name}」"}
@@ -123,9 +127,16 @@ class OrderMixin:
                 "departure_city_code": CITY_CODES.get(dep, ""),
                 "arrival_city_code": CITY_CODES.get(arr, "")}
 
-    async def _resolve_train(self, departure: str, arrival: str, date: str) -> dict:
-        """私有：下单前从 M 站 ticketList 取车次/席别参数（resId/seatId/price/站点代码）。"""
-        # 方式②：缺城市代码 → 自动调「查城市代码」补齐，不再直接报错
+    async def train_booking_info(self, departure: str, arrival: str, date: str,
+                                 train_num: str = "") -> dict:
+        """车次下单参数（原子查询，M 站 ticketList）→ 指定车次的下单内部编码。
+
+        供 submit_order 使用（booking 前置参数）。返回：
+        {ok, train:{trainId, trainNum, depart, arrive, departCode, arriveCode,
+          departTime, arriveTime, price_from, seats:[{seatName, seatId, resId, price, leftNumber}]}}
+        仅查询，不做任何下单动作。
+        """
+        # 缺城市代码 → 自动用静态表补齐（_ensure_city_codes 只查静态表，非接口连串）
         ok = self._ensure_city_codes(departure, arrival)
         if not ok.get("ok"):
             return {"ok": False, "error": ok.get("error")}
@@ -140,44 +151,53 @@ class OrderMixin:
         data = j.get("data") or {}
         if j.get("errorCode") != 710000:
             return {"ok": False, "error": j.get("msg") or str(j)[:200], "raw": j}
-        trains = []
+        # 找指定车次
+        target = None
         for t in (data.get("rows") or []):
+            if train_num and t.get("trainNum") != train_num:
+                continue
             seats = [{
                 "seatName": s.get("seatName"), "seatId": s.get("seatId"),
                 "price": s.get("adultPrice") or s.get("price"),
                 "resId": s.get("resId"), "leftNumber": s.get("leftNumber"),
                 "seatStatus": s.get("seatStatus"),
             } for s in (t.get("seatDesc") or [])]
-            trains.append({
+            target = {
                 "trainId": t.get("trainId"), "trainNum": t.get("trainNum"),
                 "depart": t.get("departStationName"), "arrive": t.get("destStationName"),
                 "departCode": t.get("departStationCode"), "arriveCode": t.get("destStationCode"),
                 "departTime": t.get("departDepartTime"), "arriveTime": t.get("destArriveTime"),
                 "duration": t.get("duration"), "price_from": t.get("price"),
-                "seatDesc": seats,
-            })
-        return {"ok": True, "count": len(trains), "trains": trains}
+                "seats": seats,
+            }
+            break
+        if target is None:
+            return {"ok": False, "error": f"未找到车次 {train_num}"}
+        return {"ok": True, "train": target}
 
     async def submit_order(self, dep: str, arr: str, date: str, train_num: str, seat_name: str,
-                           passengers: list, contact_tel: str = "") -> dict:
-        """下单创建订单（M 站 AddOrder，⚠️真购票，需登录 cookie）。
+                           passengers: list, contact_tel: str = "",
+                           booking: dict | None = None,
+                           dep_city_code: str = "", arr_city_code: str = "") -> dict:
+        """下单创建订单（M 站 AddOrder，⚠️真购票，需登录 cookie）。原子终结点。
 
+        前置参数（原子化，缺则返回错误提示，由调用方补齐）：
+          - booking：来自 train_booking_info 的返回值（含 trainId/seatId/resId/站点代码/票价）
+          - dep_city_code / arr_city_code：来自 resolve_city_code
         passengers: [{"name","psptId","tel","psptType":1,"birthday":"YYYY-MM-DD","sex":1}]
         → {ok, order_id, order_amount, pay_url}；支付由用户在手机支付宝/途牛 App 完成。
         """
-        # 1) 取该车次的座席参数（resId/seatId/price/站点代码）
-        sr = await self._resolve_train(dep, arr, date)
-        if not sr.get("ok"):
-            return sr
-        train = next((t for t in sr["trains"] if t["trainNum"] == train_num), None)
-        if not train:
-            return {"ok": False, "error": f"未找到车次 {train_num}"}
-        seat = next((s for s in train["seatDesc"] if seat_name in (s["seatName"] or "")), None)
+        if not booking or not isinstance(booking, dict) or not booking.get("train"):
+            return {"ok": False, "error": "缺前置参数 booking：请先调 train_booking_info 拿车次下单编码"}
+        if not dep_city_code or not arr_city_code:
+            return {"ok": False, "error": "缺前置参数 city_code：请先调 resolve_city_code 拿出发/到达城市代码"}
+        train = booking["train"]
+        # 找席别
+        seat = next((s for s in (train.get("seats") or []) if seat_name in (s.get("seatName") or "")), None)
         if not seat:
-            return {"ok": False,
-                    "error": f"无席别「{seat_name}」，可选：{[s['seatName'] for s in train['seatDesc']]}"}
+            return {"ok": False, "error": f"无席别「{seat_name}」，可选：{[s['seatName'] for s in train.get('seats') or []]}"}
 
-        # 2) 组装 AddOrder 参数（字段与 2026-08-07 实测订单 1259153040 一致）
+        # 组装 AddOrder 参数（字段与 2026-08-07 实测订单 1259153040 一致）
         tourist = [{
             "name": p.get("name"), "tel": p.get("tel"),
             "psptType": p.get("psptType", 1), "psptId": p.get("psptId"),
@@ -185,18 +205,18 @@ class OrderMixin:
             "sex": p.get("sex", 1), "isAdult": p.get("isAdult", 1),
             "psptEndDate": None, "isStuDisabledArmyPolice": 0, "stu": None,
         } for p in passengers]
-        adult_price = seat["price"] or 0
+        adult_price = seat.get("price") or 0
         body = {
-            "trainId": train["trainId"], "trainNumber": train["trainNum"],
-            "resourceId": seat["resId"], "seatId": seat["seatId"],
+            "trainId": train.get("trainId"), "trainNumber": train.get("trainNum"),
+            "resourceId": seat.get("resId"), "seatId": seat.get("seatId"),
             "isInsCashBack": 0, "departDate": date,
             "adultCount": len(tourist), "childCount": 0,
             "adultPrice": adult_price,
             "ministryRailwaysId": 0,   # 12306 绑定 ID，便捷购票可 0（待实测确认）
-            "departureCityCode": CITY_CODES.get(dep, ""), "arrivalCityCode": CITY_CODES.get(arr, ""),
+            "departureCityCode": dep_city_code, "arrivalCityCode": arr_city_code,
             "departureCityName": dep, "arrivalCityName": arr,
-            "departureStations": [train["departCode"]], "departureStationName": train["depart"],
-            "arrivalStations": [train["arriveCode"]], "arrivalStationName": train["arrive"],
+            "departureStations": [train.get("departCode")], "departureStationName": train.get("depart"),
+            "arrivalStations": [train.get("arriveCode")], "arrivalStationName": train.get("arrive"),
             "insuranceResourceId": 0, "insurancePrice": 0,
             "acceptStandingTicket": False, "isExcess": 0,
             "contactList": {"name": "", "appellation": "", "email": "", "phone": "",

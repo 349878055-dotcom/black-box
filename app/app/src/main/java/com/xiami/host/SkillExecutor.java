@@ -45,17 +45,9 @@ import java.util.Random;
 public class SkillExecutor {
     private final CredentialStore creds;
     private final Context ctx;
-    // 登录交互宿主（MainActivity 注入；null 则禁用自动登录，保持旧行为）
-    private LoginCoordinator.Interactor loginInteractor = null;
-
     public SkillExecutor(Context ctx) {
         this.ctx = ctx;
         this.creds = new CredentialStore(ctx);
-    }
-
-    /** 注入登录交互宿主（聊天推送输入框/图片）。未注入则不自动登录。 */
-    public void setLoginInteractor(LoginCoordinator.Interactor interactor) {
-        this.loginInteractor = interactor;
     }
 
     /** 执行蓝图，返回 skill_result JSON 字符串：{ok,status,headers,body,error}。 */
@@ -224,6 +216,10 @@ public class SkillExecutor {
                                            long ts, String nonce, String signType, String appKey) {
         String tsStr = String.valueOf(ts);
         String sign = computeSign(signType, appKey, tsStr, nonce);
+        // {{deviceid}} 设备指纹：美团等风控必填，用 Android 真机唯一 ID（对齐 glyy/美团 deviceid 需求）
+        String deviceId = android.provider.Settings.Secure.getString(
+                ctx.getContentResolver(), android.provider.Settings.Secure.ANDROID_ID);
+        if (deviceId == null || deviceId.isEmpty()) deviceId = "0";
         for (Map.Entry<String, String> e : headers.entrySet()) {
             String v = e.getValue();
             if (v == null || !v.contains("{{")) continue;
@@ -234,6 +230,7 @@ public class SkillExecutor {
             v = v.replace("{{token}}", t == null ? "" : t);
             String ak = creds.getApiKey();
             v = v.replace("{{api_key}}", ak == null ? "" : ak);
+            v = v.replace("{{deviceid}}", deviceId);
             e.setValue(v);
         }
     }

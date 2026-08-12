@@ -23,15 +23,22 @@ logging.basicConfig(
 
 app = FastAPI(title="个人助理5 · API 优先云端", version="1.0.0")
 
+# 认证中间件放内层，CORS 放最外层（后加的 add_middleware 在最外层）：
+# 否则 auth 中间件对 401/403 直接短路返回，不带 CORS 头 → App 的 file:// 页面（origin=null）
+# fetch 被 CORS 拦截抛错，拿不到 res.status=401 → 自动刷新 token 逻辑永不触发 →
+# access 过期后手机 WS 永远连不上（表现为"手机接不上去了"）。
+app.middleware("http")(auth_middleware)
+
 app.add_middleware(
     CORSMiddleware,
+    # 2026-08-11 修复：allow_credentials=True 与 allow_origins=["*"] 不兼容，
+    # 手机 App（file:// origin=null）fetch /api/v1/* 被 CORS 拦截 → 任务轮询失败、UI 不同步。
+    # 认证走 Bearer token（不依赖 cookie），故 allow_credentials=False。
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-app.middleware("http")(auth_middleware)
 
 app.include_router(api_router)
 

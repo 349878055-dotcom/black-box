@@ -295,49 +295,20 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str | None = None
 
 
 # ═══════════════════ Skill 消费 API（搜索 / 直调）═══════════════════
-# 依赖发布：tools/publish_skill.py 同步 adapters/{id}_api.py + skill_index.json
-
-import json
-import math
-import os
+# 向量搜索：本地 BGE 两级检索（retrieval 模块，零网络零成本，从各 skill 的
+# contract.json 自动构建）。skill 契约改动后重启云端即自动更新，无需手动重建索引；
+# 旧的千问云端 skill_index.json 方案已废弃删除（避免每句话调云端 embedding）。
 
 from ..adapters import registry as _skill_registry
 
-_EMBED_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings"
-_EMBED_MODEL = "text-embedding-v3"
-_INDEX_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "adapters", "skill_index.json")
 
-
-def _qwen_key() -> str:
-    try:
-        from ..config import get
-        for k in ("qwen_api_key", "bailian_api_key", "vision_api_key"):
-            v = get(k, "")
-            if v:
-                return v
-    except Exception:
-        pass
-    return os.environ.get("QWEN_API_KEY", "")
-
-
-def _embed(text: str) -> list[float] | None:
-    import requests
-    key = _qwen_key()
-    if not key:
-        return None
-    try:
-        r = requests.post(_EMBED_URL,
-                          headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                          json={"model": _EMBED_MODEL, "input": text}, timeout=20)
-        d = r.json()
-        return d["data"][0]["embedding"]
-    except Exception:
-        return None
-
-
-def _cos(a: list, b: list) -> float:
-    return sum(x * y for x, y in zip(a, b)) / (
-        math.sqrt(sum(x * x for x in a)) * math.sqrt(sum(y * y for y in b)) + 1e-9)
+def _skill_intent(pid: str) -> str:
+    """App 搜索接口展示的一句话意图：优先拼 flow 流程标题（与旧 skill_index.json 的 meta.intent 对齐）。"""
+    cfg = _skill_registry.ADAPTERS.get(pid) or {}
+    flow = cfg.get("flow") or []
+    if flow:
+        return " → ".join(f.get("title", "") for f in flow)
+    return cfg.get("capability_note") or ""
 
 
 class SkillRunRequest(BaseModel):
@@ -354,23 +325,25 @@ async def api_list_skills():
 
 @router.get("/api/v1/skills/search")
 async def api_search_skills(q: str = "", k: int = 3):
-    """向量搜索 skill（用户一句话 → top-k 命中）。"""
+    """向量搜索 skill（本地 BGE 两级检索，用户一句话 → top-k 命中）。
+
+    全程本地、零网络：索引从各 skill 的 contract.json 自动构建，
+    skill 契约改动后重启即用新方法，无需手动重建索引。
+    """
     if not q:
         return {"results": []}
-    if not os.path.isfile(_INDEX_PATH):
-        return {"results": [], "note": "索引不存在，先发布（tools/publish_skill.py）"}
-    qv = _embed(q)
-    if not qv:
-        return {"results": [], "note": "embedding 不可用（需配置千问 key）"}
-    index = json.load(open(_INDEX_PATH, encoding="utf-8"))
-    scored = []
-    for sid, it in index.items():
-        s = _cos(qv, it.get("vec", []))
-        scored.append((s, sid, it.get("meta", {})))
-    scored.sort(key=lambda x: -x[0])
+    try:
+        from ..retrieval.index import get_index
+        idx = get_index()
+        if idx is None:
+            return {"results": [], "note": "本地向量模型不可用（需 pip install sentence-transformers 并加载 bge-small-zh-v1.5）"}
+        plats = idx.search_platform(q, top_k=max(1, k))
+    except Exception as e:
+        return {"results": [], "note": f"向量检索异常：{e}"}
     return {"results": [
-        {"skill": sid, "score": round(s, 4), "name": m.get("name"), "intent": m.get("intent")}
-        for s, sid, m in scored[:k]]}
+        {"skill": p["platform"], "score": round(p["score"], 4),
+         "name": p["text"], "intent": _skill_intent(p["platform"])}
+        for p in plats]}
 
 
 @router.post("/api/v1/skills/{skill_id}/run")

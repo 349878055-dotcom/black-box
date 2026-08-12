@@ -1,6 +1,6 @@
 """glyy · 挂号 + 我的就诊 + 病历/缴费模块（需登录）。
 
-C 挂号：register（提交挂号 ⚠️真挂号）/ book（一键挂号）
+C 挂号：register（提交挂号 ⚠️真挂号）
 D 我的就诊：get_patient / list_orders / cancel_reservation / visit_records / list_reports / clinic_no_paid
 E 病历/处方/缴费：get_recipe / get_recipe_detail / clinic_no_paid_detail / visit_patient_record / medical_pay
 """
@@ -68,68 +68,6 @@ class RegisterMixin:
                 if pay_url:
                     return {**j, "pay_url": pay_url}
         return j
-
-    async def book(self, dept_code: str = "", dept_name: str = "", doctor_code: str = "",
-                   date: str | None = None, business_type: int = 2,
-                   id_card: str = "", open_id: str = "") -> dict:
-        """一键挂号：给科室(代码或名称)+医生(可选)+日期(可选) → 自动查排班选可约时段提交。
-
-        ⚠️ 真挂号有副作用，调用前须用户确认。返回服务器原始响应。
-        若 doctor_code 为空 → 取该科室第一个可约排班；business_type 2=专家号 1=普通号。
-        """
-        # 1. 定位科室
-        dept = None
-        if dept_code:
-            dept = {"dept_code": dept_code, "dept_name": dept_name}
-        else:
-            for d in await self.list_depts():
-                if dept_name and dept_name in d.get("dept_name", ""):
-                    dept = d
-                    break
-            if not dept:
-                return {"ok": False, "error": "未找到科室"}
-        dc, dn = dept["dept_code"], dept["dept_name"]
-        # 2. 患者信息
-        pat = await self.get_patient()
-        if id_card:
-            pat["id_card"] = id_card
-        # 3. 找可约排班（未来 7 天）
-        t = datetime.date.today()
-        start = date or t.isoformat()
-        for offset in range(0, 8):
-            d = (datetime.date.fromisoformat(start) + datetime.timedelta(days=offset)).isoformat()
-            st = 2 if business_type == 2 else 1
-            ty = 1 if business_type == 2 else 0
-            sch = await self.get_schedule(dc, d, business_type=business_type,
-                                          schedule_type=st, type_=ty)
-            sec = "expert" if business_type == 2 else "normal"
-            for item in (sch.get(sec) or []):
-                if doctor_code and item.get("doctor_code") != doctor_code:
-                    continue
-                slots = [s for s in (item.get("detail") or []) if s.get("is_enable") == 1]
-                if not slots:
-                    continue
-                doctor = item.get("doctor") or {}
-                j = await self.register(
-                    dept_code=dc, dept_name=dn,
-                    doctor_code=item.get("doctor_code") or doctor.get("doctor_code") or "",
-                    doctor_name=doctor.get("doctor_name") or "",
-                    appointment_time=d,
-                    noon_code=item.get("noon_code") or "上午",
-                    schedule_id=item.get("schedule_id"),
-                    schedule_num_id=slots[0].get("schedule_num_id"),
-                    start_hour=slots[0].get("time_part"),
-                    reg_type=item.get("reg_type") or str(business_type),
-                    reg_name=item.get("reg_name") or ("专家号" if business_type == 2 else "普通号"),
-                    res_title_code=item.get("res_title_code") or "02",
-                    res_title_name=item.get("res_title_name") or "副主任",
-                    reg_fee=item.get("reg_fee") or "0",
-                    business_type=business_type,
-                    patient=pat, open_id=open_id,
-                )
-                return {"ok": True, "date": d, "dept": dn, "slot": slots[0],
-                        "response": j}
-        return {"ok": False, "error": "未来7天无该条件可约时段（可能已满）"}
 
     # ═════════════ D. 我的就诊（需登录）═════════════
 

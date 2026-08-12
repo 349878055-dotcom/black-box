@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from typing import Any, Awaitable, Callable
 
 from .llm import LLMClient
@@ -31,9 +32,14 @@ SYSTEM_PROMPT = """你是「生活助手」，帮用户解决日常生活里的�
 4. 查通用信息（新闻/政策/电话/价格）→ 用 web_search；
 5. 需要精确当前时间（现在几点/上午下午/距某时刻还有多久/判断是否来得及）→
    用 get_current_time 工具拿云端准确时刻，不要自己猜时间；
-6. **登录由系统自动处理，不需要 skill_run 登录方法**：
-   若 skill_run 返回"需要登录"，系统会自动完成登录并重试，你只需照常继续业务；
-   不要在对话里自行解释/编排登录步骤（登录中需用户输入的验证码，会由 App 直接弹出）；
+6. **登录由系统自动处理（短信验证码，纯 API，无网页）**：
+   - 用户要求「登录某平台」或要做需登录的操作 → 先 skill_run 该平台一个**需登录**的业务方法
+     （如 glyy 的 visit_records / list_orders / get_patient 等）；系统检测到"需要登录"会
+     自动走「手机号+短信验证码」登录（图形码/短信码由 App 弹出让用户配合输入），
+     登录成功自动重试原业务；
+   - **严禁自称"已发送验证码 / 已登录"**（你只是触发方法，真正发短信/登录是系统做的，
+     你没真发）；拿到的结果若提示需要登录，就如实转达、让用户按 App 弹窗输入；
+   - 不要在对话里自行解释/编排登录步骤；
 7. 办完用 done 总结给用户。
 
 平台规则（哪些方法能下单、需要登录等）以 skill_list / 小纸条里的方法描述为准，
@@ -141,6 +147,19 @@ class Agent:
             if role in ("user", "assistant") and content:
                 messages.append({"role": role, "content": str(content)[:2000]})
         messages.append({"role": "user", "content": user_content})
+        # 登录意图直通（2026-08-11：LLM 对"登录X"常幻觉"已发验证码"，
+        # 这里绕过 LLM 直接触发系统登录编排，保证"登录鼓楼医院"可靠走纯 API 短信登录）
+        try:
+            direct_skill, direct_phone = self._direct_login(text)
+            if direct_skill:
+                logger.info("检测到明确登录意图 skill=%s phone=%s，直通系统登录编排",
+                            direct_skill, direct_phone or "-")
+                ok = await self._ensure_login(direct_skill, direct_phone)
+                name = {"glyy": "鼓楼医院", "tuniu": "途牛"}.get(direct_skill, direct_skill)
+                return (f"已开始为你登录{name}（纯短信验证码，无网页）。" if ok
+                        else f"{name}登录未完成，请稍后重试或换网络。")
+        except Exception as e:
+            logger.warning("登录直通异常: %s", e)
         for _ in range(MAX_STEPS):
             # LLM 是同步阻塞调用（httpx.Client），放线程池执行，避免卡死事件循环
             out = await asyncio.to_thread(self.llm.chat_tools, messages, TOOL_SPECS)
@@ -163,27 +182,27 @@ class Agent:
             if name == "skill_list":
                 return {"ok": True, "data": self._skill_list_payload()}
             if name == "skill_run":
-                self._fill_credentials(args)
                 skill = str(args.get("skill", ""))
                 method = str(args.get("method", ""))
                 params = args.get("params") or {}
-                # 自动触发登录：方法需要登录且未登录 → 自动走登录流程后重试（最多 2 次）
+                # 前置依赖自动补齐（原子化 + 前置依赖）：requires 参数缺失时，
+                # 代码自动现调源头方法拿真实编码填入，LLM 无需抄编号（导诊台机制）
+                self._fill_misses = []   # 记录「提供了名字但匹配不到」的项
+                params = await self._fill_requires(skill, method, params)
+                # 匹配不上名字 → 明确返回错误给 AI，不继续瞎调（宁可报错也不挂错）
+                if getattr(self, "_fill_misses", []):
+                    return {"ok": False, "skill": skill, "method": method,
+                            "error": "；".join(self._fill_misses)[:500],
+                            "note": "请确认名称是否正确，或询问用户后重试"}
+                # 自动触发登录：方法需要登录且未登录 → 云端通用登录器登录后自动重试（最多 2 次）
                 for attempt in range(2):
                     result = await adapters.run(skill, method, params,
                                                 device_id=self.device_id)
                     if isinstance(result, dict) and result.get("need_login"):
                         logger.info("检测到 %s 需要登录（第 %d 次）", skill, attempt + 1)
-                        # 方案②：手机端全权处理登录（skill 声明了 login 配置的平台，如途牛）——
-                        # 云端不编排登录，直接重试一次；手机端 SkillExecutor 在收到带 login 配置的
-                        # 请求时会自动检测登录信号/无session → LoginCoordinator 登录 → 自动重试成功。
-                        if self._skill_has_login(skill):
-                            logger.info("%s 登录由手机端处理（login 配置），云端重试", skill)
-                            if attempt == 0:
-                                continue
-                            result = dict(result)
-                            result["note"] = f"需要先登录 {skill}（手机端未完成登录：{result.get('error', '')}）"
-                            break
-                        # 无 login 配置（如 glyy）→ 云端编排登录
+                        # 登录统一由云端 login_flow 编排（skill 在 contract.json 声明 login 配置）：
+                        # 撞出未登录 → 隐藏内部错误 → 系统登录 → 自动重试原业务，
+                        # 不把 token 失效/未登录等内部细节原样暴露给客户。
                         ok = await self._ensure_login(skill)
                         if not ok:
                             result = dict(result)
@@ -243,106 +262,44 @@ class Agent:
             logger.warning("tool %s 异常: %s", name, e)
             return {"ok": False, "error": f"{name} 异常：{e}"}
 
-    def _skill_has_login(self, skill: str) -> bool:
-        """该 skill 是否声明了 login 配置（方案②：手机端全权登录的平台）。"""
+    # ─────────── 自动触发登录（skill_run 返回 need_login 时）───────────
+    def _direct_login(self, text: str) -> tuple[str, str]:
+        """检测明确登录意图：返回 (skill, 消息中手机号)。命中才直通，避免误触发普通对话。"""
+        t = (text or "").strip()
+        if "登录" not in t and "登" not in t:
+            return "", ""
+        phone = ""
+        m = re.search(r"(?<!\d)1[3-9]\d{9}(?!\d)", t)
+        if m:
+            phone = m.group(0)
+        low = t.lower()
+        if "glyy" in low or "鼓楼" in t:
+            return "glyy", phone
+        if "tuniu" in low or "途牛" in t:
+            return "tuniu", phone
+        if "meituan" in low or "美团" in t or "外卖" in t:
+            return "meituan_waimai", phone
+        return "", ""
+
+    async def _ensure_login(self, skill: str, phone: str = "") -> bool:
+        """按 skill 声明的 login 配置触发登录（云端通用 login_flow，登录态存手机本地）。
+
+        每个 skill 在 contract.json/register.py 声明 login 配置（method 区分登录方式）：
+          sms_verify — 短信验证码纯 API（手机号→图形码→短信码→login，走手机通道）
+          browser   — 内置浏览器真人登录（navigate→真人操作→导出登录态）
+        登录编排逻辑统一在 core/login_flow.py，agent 不再为每个 skill 硬编码 _login_xxx。
+        """
         try:
             from ..adapters.registry import ADAPTERS
+            from .login_flow import run_login
             cfg = ADAPTERS.get(skill) or {}
-            lg = cfg.get("login") or {}
-            return bool(lg.get("method"))
-        except Exception:
-            return False
-
-    # ─────────── 自动触发登录（skill_run 返回 need_login 时）───────────
-    async def _ensure_login(self, skill: str) -> bool:
-        """按 skill 触发登录：glyy 走验证码登录；tuniu 引导 M 站网页登录（真人配合滑块+短信，cookie 存手机）。"""
-        if skill == "glyy":
-            return await self._login_glyy()
-        if skill == "tuniu":
-            return await self._login_tuniu()
-        return False
-
-    async def _login_glyy(self, phone: str = "") -> bool:
-        """glyy 登录：内置浏览器自助（用户 2026-08-08 铁令：所有平台登录统一内置浏览器，仅此一种方式）。
-
-        流程（云端不持有登录态，全程手机本地）：
-          1) send_cmd("navigate") → App 自动切到内置浏览器，打开 glyy 登录页（微信 UA）；
-          2) 客户真人操作：页面输手机号 → 收短信验证码 → 填码完成登录；
-          3) 客户回复「已登录」→ 云端 send_cmd("export_token") → App 导出登录态存手机凭据库；
-          4) 之后业务请求由手机 SkillExecutor 自动补 Authorization: Bearer <token>。
-
-        铁律：glyy 一切请求走手机通道；登录态只存手机本地，云端不持有。
-        """
-        try:
-            from ..channel.bridge import bridge
-            # 1) 自动弹出内置浏览器打开 glyy 登录页（微信 UA，老站必须否则挂起）
-            if self.device_id:
-                try:
-                    await bridge.send_cmd(self.device_id, "navigate",
-                                          {"url": "https://www.ih.njglyy.com",
-                                           "ua": "wechat", "login_skill": "glyy",
-                                           # 网页版需小程序 servicewechat Referer 才能过云防护（否则 504 源站不可达）
-                                           "referer": "https://servicewechat.com/wx74a991a2ae77468d/330/page-frame.html"})
-                except Exception as e:
-                    logger.warning("glyy navigate 打开登录页失败: %s", e)
-            # 2) 引导真人操作（手机号 + 短信验证码，网页内完成，不经过云端 AI）
-            await self._ask(
-                "已在内置浏览器打开鼓楼医院登录页：\n"
-                "1. 在页面输入你的手机号\n"
-                "2. 接收短信验证码并填入，完成登录\n"
-                "完成后回复「已登录」，我会自动保存登录态继续办事。"
-            )
-            # 3) 客户说「已登录」→ 自动导出登录态（Bearer token）存手机凭据库
-            if self.device_id:
-                try:
-                    res = await bridge.send_cmd(self.device_id, "export_token",
-                                                {"skill": "glyy", "domain": "https://www.ih.njglyy.com"})
-                    logger.info("glyy export_token: %s", str(res)[:200])
-                except Exception as e:
-                    logger.warning("glyy export_token 失败: %s", e)
-            return True
+            login_cfg = cfg.get("login") or {}
+            if not login_cfg:
+                logger.warning("skill %s 未声明 login 配置，无法自动登录", skill)
+                return False
+            return await run_login(skill, login_cfg, self.device_id, self._ask, phone)
         except Exception as e:
-            logger.warning("glyy 浏览器登录引导异常: %s", e)
-            return False
-
-    async def _login_tuniu(self, phone: str = "") -> bool:
-        """途牛 M 站登录引导：自动弹内置浏览器打开登录页 → 真人滑块+短信 → 自动导出 cookie。
-
-        登录态 = cookie（isLogined/ssoUser/muser/TUNIUmuser/tuniuuser_id）。
-        流程（云端不持有登录态，全程手机本地）：
-          1) send_cmd("navigate") → App 自动切到内置浏览器并打开 m.tuniu.com/user/login；
-          2) 用户真人操作：输手机号 → 拖腾讯滑块（必现不可跳过）→ 输短信验证码；
-          3) 用户回复「已登录」→ 云端 send_cmd("export_cookies") → App 自动导出 cookie 存手机凭据库；
-          4) 之后 submit_order 由手机 SkillExecutor 自动补 Cookie 头（credential kind=cookie）。
-        """
-        try:
-            from ..channel.bridge import bridge
-            # 1) 自动弹出内置浏览器打开途牛登录页（点点点 → 直接跳浏览器）
-            if self.device_id:
-                try:
-                    await bridge.send_cmd(self.device_id, "navigate",
-                                          {"url": "https://m.tuniu.com/user/login"})
-                except Exception as e:
-                    logger.warning("途牛 navigate 打开登录页失败: %s", e)
-            # 2) 引导真人操作（滑块必现，只能网页拖）
-            await self._ask(
-                "已在内置浏览器打开途牛登录页：\n"
-                "1. 输入手机号（个人资料里的手机号）\n"
-                "2. 拖动滑块通过人机验证\n"
-                "3. 输入短信验证码完成登录\n"
-                "完成后回复「已登录」，我会自动保存登录态继续下单。"
-            )
-            # 3) 用户说「已登录」→ 自动导出 cookie 存手机凭据库
-            if self.device_id:
-                try:
-                    res = await bridge.send_cmd(self.device_id, "export_cookies",
-                                                {"domain": "https://m.tuniu.com"})
-                    logger.info("途牛 export_cookies: %s", str(res)[:200])
-                except Exception as e:
-                    logger.warning("途牛 export_cookies 失败: %s", e)
-            return True
-        except Exception as e:
-            logger.warning("途牛 M 站登录引导异常: %s", e)
+            logger.warning("登录编排异常 skill=%s: %s", skill, e)
             return False
 
     # ─────────── 小纸条机制 ───────────
@@ -408,29 +365,174 @@ class Agent:
                 pass
         return adapters.list_skills()
 
-    def _fill_credentials(self, args: dict) -> None:
-        """登录/预约时自动从用户 profile（个人资料中心）取账号，免用户提供。
-        只补 book 方法；用户 params 已带或 profile 没有则不覆盖。"""
-        method = str(args.get("method") or "")
-        if method not in ("book",):
-            return
-        params = dict(args.get("params") or {})
-        if params.get("username") and params.get("password"):
-            return
-        try:
-            from ..store.users import users
+    async def _fill_requires(self, skill: str, method: str, params: dict,
+                             _seen: set | None = None) -> dict:
+        """前置依赖自动补齐（原子化 + 前置依赖，导诊台机制）。
 
-            u = users.get(self.device_id)
-            prof = dict((u.profile or {}) if u else {})
-            user = str(prof.get("username") or "")
-            pwd = str(prof.get("password") or "")
-            if user and pwd:
-                params.setdefault("username", user)
-                params.setdefault("password", pwd)
-                args["params"] = params
-                logger.info("已从个人资料自动带入账号 %s 用于 %s", user, method)
-        except Exception:
-            pass
+        方法在 contract.json 声明了 requires（某参数来自源头方法的返回字段）且参数缺失时，
+        代码自动现调源头方法拿真实编码填入，LLM 无需抄编号。
+        - match：用本方法已给参数（如医生名/科室名）在源头返回里精确匹配对应编码，
+          避免「取第一个」导致挂错人/挂错科室/挂错时间。
+        - pass_params：调源头方法时透传本方法的相关参数（如 train_num/date 传给 train_booking_info）。
+        属执行层兜底：不新增方法、不改变原子性（不是聚合方法）。
+        递归补齐源头方法自身的前置依赖（防多层依赖：list_depts → list_dept_doctors → register_online）。
+        """
+        params = dict(params or {})
+        _seen = _seen or set()
+        try:
+            from ..adapters.registry import ADAPTERS
+            cfg = ADAPTERS.get(skill)
+            if not cfg:
+                return params
+            minfo = (cfg.get("methods") or {}).get(method)
+            reqs = (minfo.get("requires") or []) if minfo else []
+            for r in reqs:
+                if not isinstance(r, dict):
+                    continue
+                param = r.get("param", "")
+                if not param or params.get(param) not in (None, "", []):
+                    continue
+                from_m = r.get("from", "")
+                field = r.get("field", "")
+                if not from_m:
+                    continue
+                # 循环保护：仅当源头方法自身也有 requires（可能引发 A→B→A）才拦截；
+                # 无 requires 的源头（如 resolve_city_code）可被不同参数多次调用（dep/arr）
+                from ..adapters.registry import ADAPTERS as _AD
+                _src_minfo = ((_AD.get(skill) or {}).get("methods") or {}).get(from_m) or {}
+                _src_reqs = _src_minfo.get("requires") or []
+                key = (skill, from_m)
+                if _src_reqs and key in _seen:
+                    continue
+                new_seen = (_seen | {key}) if _src_reqs else _seen
+                # 组装源头方法参数：递归补其前置依赖 + 按 pass_params 透传本方法已给参数
+                src_params = await self._fill_requires(skill, from_m, {}, new_seen)
+                pass_map = r.get("pass_params") or {}
+                if isinstance(pass_map, dict):
+                    for src_k, my_k in pass_map.items():
+                        if params.get(my_k) not in (None, "", []):
+                            src_params[src_k] = params[my_k]
+                src = await adapters.run(skill, from_m, src_params, device_id=self.device_id)
+                if not (isinstance(src, dict) and src.get("ok")):
+                    logger.info("[fill_requires] %s.%s 源头 %s 失败，跳过自动补 %s",
+                                skill, method, from_m, param)
+                    continue
+                # 按 match（用本方法已给参数精确匹配源头记录）取值，避免「取第一个」挂错
+                val = self._extract_value(src.get("data"), field,
+                                          r.get("match") or {}, params)
+                if val not in (None, "", [], {}):
+                    params[param] = val
+                    logger.info("[fill_requires] %s.%s 自动补 %s=%s",
+                                skill, method, param, str(val)[:50])
+                elif r.get("match"):
+                    # 提供了名字但没匹配到 → 记录明确错误（返回给 AI 让 TA 确认名字）
+                    want_desc = "、".join(
+                        f"{mk}={params.get(mv, '')}" for mk, mv in (r.get("match") or {}).items()
+                        if params.get(mv) not in (None, "", []))
+                    if want_desc:
+                        msg = (f"自动补全失败：{method} 需要参数 {param}（来自 {from_m} 的 {field}），"
+                               f"按你提供的信息「{want_desc}」在 {from_m} 结果中未找到匹配项")
+                        self._fill_misses = getattr(self, "_fill_misses", [])
+                        if msg not in self._fill_misses:
+                            self._fill_misses.append(msg)
+                        logger.info("[fill_requires] %s", msg)
+        except Exception as e:
+            logger.warning("[fill_requires] 异常: %s", e)
+        return params
+
+    def _extract_value(self, data, field: str, match: dict, params: dict):
+        """从源头返回里取 field 的值。
+
+        match: {源字段: 本方法参数名} —— 用本方法已给参数值在源头结果里精确匹配记录后取 field，
+        解决「取第一个会挂错人/挂错科室」的问题。缺匹配键或匹配不到 → 返回 None（安全，不编造）。
+        会递归进 data 的所有 list/dict（兼容 glyy 的 {normal:[...], expert:[...]} 结构，
+        以及 doctor_name 在排班条目的嵌套 doctor 子对象里）。
+        无 match 时取第一条含 field 的记录（单结果源头，如 get_patient/get_medical_card）。
+        """
+        if match and isinstance(match, dict):
+            for it in self._flatten_records(data):
+                if not isinstance(it, dict):
+                    continue
+                matched = True
+                for src_field, my_param in match.items():
+                    want = params.get(my_param)
+                    if want in (None, "", []):
+                        matched = False
+                        break
+                    if not self._match_value(it, src_field, want):
+                        matched = False
+                        break
+                if matched:
+                    return self._pick_field(it, field)
+            return None
+        return self._pick_field(data, field)
+
+    def _match_value(self, record, src_field: str, want) -> bool:
+        """在 record（含嵌套 list/dict）里找 src_field 字段，其值是否等于 want。"""
+        if isinstance(record, dict):
+            if src_field in record or self._camelize(src_field) in record:
+                key = src_field if src_field in record else self._camelize(src_field)
+                return str(record.get(key, "")).strip() == str(want).strip()
+            for v in record.values():
+                if isinstance(v, (dict, list)):
+                    if self._match_value(v, src_field, want):
+                        return True
+        elif isinstance(record, list):
+            for v in record:
+                if isinstance(v, (dict, list)):
+                    if self._match_value(v, src_field, want):
+                        return True
+        return False
+
+    @staticmethod
+    def _camelize(name: str) -> str:
+        """dept_code → deptCode（字段名风格兼容：下划线/驼峰互认）。"""
+        parts = str(name or "").split("_")
+        return parts[0] + "".join(p.capitalize() for p in parts[1:]) if parts else ""
+
+    def _flatten_records(self, data):
+        """把返回值展开成所有 dict 记录（递归进 list/dict）。"""
+        out = []
+        if isinstance(data, list):
+            for it in data:
+                out.extend(self._flatten_records(it))
+        elif isinstance(data, dict):
+            out.append(data)
+            for v in data.values():
+                if isinstance(v, (list, dict)):
+                    out.extend(self._flatten_records(v))
+        return out
+
+    def _pick_field(self, data, field: str):
+        """从源头方法返回值里取字段。支持 a.b 路径；data 为 list 时取首个命中项。"""
+        if field == "patient":
+            return data if isinstance(data, dict) else None
+        if isinstance(data, list):
+            for it in data:
+                if isinstance(it, dict):
+                    v = self._pick_field(it, field)
+                    if v not in (None, "", [], {}):
+                        return v
+            return None
+        if isinstance(data, dict):
+            for key in (field, self._camelize(field)):
+                if key in data and data.get(key) not in (None, "", [], {}):
+                    return data.get(key)
+            if "." in field:
+                cur = data
+                for p in field.split("."):
+                    p_key = p if p in cur else self._camelize(p)
+                    if isinstance(cur, list):
+                        cur = next((x.get(p_key) for x in cur
+                                    if isinstance(x, dict) and x.get(p_key) is not None), None)
+                    elif isinstance(cur, dict):
+                        cur = cur.get(p_key)
+                    else:
+                        return None
+                    if cur is None:
+                        return None
+                return cur
+        return None
 
     async def _ask(self, question: str, image: str | None = None) -> str:
         """问用户。image 为可选验证码图片（base64），推送到 App 显示给用户看。"""

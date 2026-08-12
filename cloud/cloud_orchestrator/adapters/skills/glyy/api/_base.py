@@ -3,7 +3,7 @@
 后端：https://www.ih.njglyy.com:9532/caring/api
 签名：sign = SHA1(MD5(appKey + timestamp + nonce))，appKey=1340patient
 认证：公开接口 Basic；登录后带 Authorization: Bearer <access_token>
-UA  ：必须用微信手机 UA，否则服务器挂起
+cUA  ：保留微信手机 UA（兼容老站风控；实测公开接口带/不带 UA 均正常返回，非硬性要求）
 
 Device-as-Proxy：云端组装蓝图 → 手机直连 → 回传 skill_result → 云端解析。
 ⚠️ 2026-08-06 已删除「云端直发降级」：未注入 executor 直接报错（铁律：glyy 禁云端直连）。
@@ -108,7 +108,7 @@ class GlyyBase:
     def describe_request(self, method: str, **params) -> dict | None:
         """第 3 条：返回方法对应的请求蓝图（供第 2 条下发手机）。
 
-        单请求方法 → 完整蓝图；复合方法（login/get_patient/book…）→ None（云端编排）。
+        单请求方法 → 完整蓝图；复合方法（login/get_patient…）→ None（云端编排）。
         """
         m = self._REQUEST_MAP.get(method)
         if not m:

@@ -6,8 +6,10 @@
    —— 官方开放平台，只查询，不能下单（book 无权限）
 
 ② 买（途牛 M 站 m.tuniu.com，接口直调，需登录 cookie）→ order.py（OrderMixin）
-   set_cookies → submit_order（AddOrder，乘客直传 touristList，免网页"添加乘客"弹窗）→ pay
+   resolve_city_code / train_booking_info（原子查询：城市码/车次下单编码）
+   → submit_order（AddOrder，原子终结点，乘客直传 touristList）→ pay
    —— 下单创建订单，支付在手机支付宝/途牛 App 完成（电脑无支付宝客户端付不了）
+   —— 原子化：submit_order 不再内部自动连串，前置编码由 train_booking_info / resolve_city_code 提供（requires 声明，agent 可自动补齐）
 
 本文件 = 入口类（TuniuAPI = QueryMixin + OrderMixin），职责拆分到 query.py / order.py。
 

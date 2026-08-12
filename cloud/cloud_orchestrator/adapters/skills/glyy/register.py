@@ -19,6 +19,8 @@ REGISTER: dict = {
     "capability": _contract.get("capability", ""),
     "capability_note": _contract.get("capability_note", ""),
     "flow": _contract.get("flow", []),       # 业务流程图（功能清单）
+    # login: 登录配置（method=sms_verify 短信验证码 / browser 浏览器），由云端 login_flow 通用编排执行
+    "login": _contract.get("login", {}),
     # methods: 方法名 → {desc, need_login, params, keywords, success_ret, error_ret, system_only}
     "methods": {
         m["name"]: {k: v for k, v in m.items() if k != "name"}

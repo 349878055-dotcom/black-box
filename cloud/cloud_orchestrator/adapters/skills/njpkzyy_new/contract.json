@@ -75,6 +75,16 @@
         "有哪些科",
         "浦口中医院科室"
       ],
+      "provides": {
+        "dept_code": {
+          "desc": "科室编码（真实科室代码），供 list_dept_doctors/get_available_dates/get_schedule/judge_online/register_online 使用",
+          "used_by": ["list_dept_doctors", "get_available_dates", "get_schedule", "judge_online", "register_online"]
+        },
+        "dept_name": {
+          "desc": "科室名，供 register_online 使用",
+          "used_by": ["register_online"]
+        }
+      },
       "success_ret": "",
       "error_ret": "",
       "system_only": false
@@ -93,16 +103,22 @@
         "下午",
         "号源时段"
       ],
+      "provides": {
+        "noon_code": {
+          "desc": "午别代码，供 judge_online/register_online 使用",
+          "used_by": ["judge_online", "register_online"]
+        }
+      },
       "success_ret": "",
       "error_ret": "",
       "system_only": false
     },
     {
       "name": "list_dept_doctors",
-      "desc": "科室医生 → [{doctor_code, doctor_name, dept_name, speciality}]。⚠️须先 list_depts 拿真实 dept_code（本才艺科室是两级结构）",
+      "desc": "科室医生 → [{doctor_code, doctor_name, dept_name, speciality}]",
       "need_login": false,
       "params": {
-        "dept_code": "真实科室代码（先查 list_depts）",
+        "dept_code": "真实科室代码",
         "branch_code": "",
         "branch_name": ""
       },
@@ -112,13 +128,27 @@
         "专家",
         "哪个医生"
       ],
+      "requires": [
+        {
+          "param": "dept_code",
+          "from": "list_depts",
+          "field": "dept_code",
+          "note": "先调 list_depts 拿到目标科室的真实 dept_code（本才艺科室是两级结构），禁止编造"
+        }
+      ],
+      "provides": {
+        "doctor_code": {
+          "desc": "医生代码，供 judge_online/register_online 使用",
+          "used_by": ["judge_online", "register_online"]
+        }
+      },
       "success_ret": "",
       "error_ret": "",
       "system_only": false
     },
     {
       "name": "get_available_dates",
-      "desc": "可约日期 → [YYYY-MM-DD, ...]（默认今天~+7天）。dept_code 必填（真实科室代码）",
+      "desc": "可约日期 → [YYYY-MM-DD, ...]（默认今天~+7天）",
       "need_login": false,
       "params": {
         "dept_code": "真实科室代码",
@@ -130,6 +160,14 @@
         "可约日期",
         "哪天能约",
         "放号"
+      ],
+      "requires": [
+        {
+          "param": "dept_code",
+          "from": "list_depts",
+          "field": "dept_code",
+          "note": "先调 list_depts 拿到目标科室的真实 dept_code，禁止编造"
+        }
       ],
       "success_ret": "",
       "error_ret": "",
@@ -150,6 +188,32 @@
         "哪天有号",
         "门诊时间"
       ],
+      "requires": [
+        {
+          "param": "dept_code",
+          "from": "list_depts",
+          "field": "dept_code",
+          "note": "先调 list_depts 拿到目标科室的真实 dept_code，禁止编造"
+        }
+      ],
+      "provides": {
+        "schedule_id": {
+          "desc": "排班 id，供 get_schedule_detail/register_online 使用",
+          "used_by": ["get_schedule_detail", "register_online"]
+        },
+        "schedule_num_id": {
+          "desc": "时段号 id（detail 内），供 register_online 使用",
+          "used_by": ["register_online"]
+        },
+        "time_part": {
+          "desc": "时段（detail 内），供 register_online 使用",
+          "used_by": ["register_online"]
+        },
+        "noon_code": {
+          "desc": "午别代码，供 register_online 使用",
+          "used_by": ["register_online"]
+        }
+      },
       "success_ret": "",
       "error_ret": "",
       "system_only": false
@@ -169,16 +233,38 @@
         "能否在线挂",
         "网上挂号"
       ],
+      "requires": [
+        {
+          "param": "dept_code",
+          "from": "list_depts",
+          "field": "dept_code",
+          "note": "先调 list_depts 拿到目标科室的真实 dept_code"
+        },
+        {
+          "param": "doctor_code",
+          "from": "list_dept_doctors",
+          "field": "doctor_code",
+          "note": "如需指定医生，先调 list_dept_doctors 拿真实 doctor_code",
+          "optional": true
+        },
+        {
+          "param": "noon_code",
+          "from": "list_noon_codes",
+          "field": "noon_code",
+          "note": "午别代码，可先调 list_noon_codes",
+          "optional": true
+        }
+      ],
       "success_ret": "",
       "error_ret": "",
       "system_only": false
     },
     {
       "name": "get_schedule_detail",
-      "desc": "在线号时段详情 → [{time_part, schedule_num_id, remaining_num, is_enable}]。需先从 get_schedule 拿到 schedule_id",
+      "desc": "在线号时段详情 → [{time_part, schedule_num_id, remaining_num, is_enable}]",
       "need_login": false,
       "params": {
-        "schedule_id": "排班 id（先查 get_schedule）",
+        "schedule_id": "排班 id",
         "schedule_day": "YYYY-MM-DD",
         "type": "0"
       },
@@ -186,6 +272,14 @@
         "时段",
         "号源明细",
         "几点能挂"
+      ],
+      "requires": [
+        {
+          "param": "schedule_id",
+          "from": "get_schedule",
+          "field": "schedule_id",
+          "note": "先调 get_schedule 拿到排班的 schedule_id，禁止编造"
+        }
       ],
       "success_ret": "",
       "error_ret": "",
@@ -233,13 +327,19 @@
         "患者信息",
         "就诊人"
       ],
+      "provides": {
+        "patient_code": {
+          "desc": "患者编号，供 register_online 使用",
+          "used_by": ["register_online"]
+        }
+      },
       "success_ret": "",
       "error_ret": "",
       "system_only": false
     },
     {
       "name": "register_online",
-      "desc": "在线挂号（POST /api/public/v3/register/online）⚠️真挂号有副作用，须用户确认。需登录；参数对齐真实请求体（appointment_time/dept_code/dept_name/doctor_code/doctor_name/id_card/patient_code/patient_name/noon_code/schedule_id/schedule_num_id/time_part/cost/pay_channel/open_id）",
+      "desc": "在线挂号（POST /api/public/v3/register/online）⚠️真挂号有副作用，须用户确认。需登录；参数由前置查询方法提供（见 requires），禁止编造编码",
       "need_login": true,
       "params": {
         "appointment_time": "YYYY-MM-DD 或完整时间",
@@ -247,9 +347,9 @@
         "dept_name": "科室名",
         "doctor_code": "医生代码",
         "doctor_name": "医生名",
-        "id_card": "患者身份证",
-        "patient_code": "患者编号（查 get_medical_card）",
-        "patient_name": "患者姓名",
+        "id_card": "患者身份证（由用户提供/个人资料中心，非接口返回）",
+        "patient_code": "患者编号（来自 get_medical_card）",
+        "patient_name": "患者姓名（由用户提供/个人资料中心，非接口返回）",
         "noon_code": "午别代码",
         "schedule_id": "排班 id",
         "schedule_num_id": "时段号 id",
@@ -262,22 +362,98 @@
         "挂这个科",
         "提交挂号"
       ],
+      "requires": [
+        {
+          "param": "dept_code",
+          "from": "list_depts",
+          "field": "dept_code",
+          "match": { "dept_name": "dept_name" },
+          "note": "先用用户给的科室名在 list_depts 结果里精确匹配，取真实 dept_code"
+        },
+        {
+          "param": "dept_name",
+          "from": "list_depts",
+          "field": "dept_name",
+          "match": { "dept_name": "dept_name" },
+          "note": "与 dept_code 对应的科室名（用科室名匹配锁定）"
+        },
+        {
+          "param": "doctor_code",
+          "from": "list_dept_doctors",
+          "field": "doctor_code",
+          "match": { "doctor_name": "doctor_name" },
+          "pass_params": { "dept_code": "dept_code" },
+          "note": "先 list_depts 定科室，再用医生名在 list_dept_doctors 结果里精确匹配，取真实 doctor_code"
+        },
+        {
+          "param": "doctor_name",
+          "from": "list_dept_doctors",
+          "field": "doctor_name",
+          "match": { "doctor_name": "doctor_name" },
+          "pass_params": { "dept_code": "dept_code" },
+          "note": "与 doctor_code 对应的医生名（用医生名匹配锁定）"
+        },
+        {
+          "param": "schedule_id",
+          "from": "get_schedule",
+          "field": "schedule_id",
+          "match": { "doctor_name": "doctor_name" },
+          "pass_params": { "dept_code": "dept_code" },
+          "note": "先 list_depts 定科室，再用医生名在 get_schedule 排班结果里精确匹配，取真实 schedule_id"
+        },
+        {
+          "param": "schedule_num_id",
+          "from": "get_schedule",
+          "field": "detail.schedule_num_id",
+          "match": { "doctor_name": "doctor_name" },
+          "pass_params": { "dept_code": "dept_code" },
+          "note": "get_schedule 返回匹配排班的 detail 里的 schedule_num_id"
+        },
+        {
+          "param": "time_part",
+          "from": "get_schedule",
+          "field": "detail.time_part",
+          "match": { "doctor_name": "doctor_name" },
+          "pass_params": { "dept_code": "dept_code" },
+          "note": "get_schedule 返回匹配排班的 detail 里的 time_part"
+        },
+        {
+          "param": "noon_code",
+          "from": "get_schedule",
+          "field": "noon_code",
+          "match": { "doctor_name": "doctor_name" },
+          "pass_params": { "dept_code": "dept_code" },
+          "note": "get_schedule 返回匹配排班的 noon_code"
+        },
+        {
+          "param": "patient_code",
+          "from": "get_medical_card",
+          "field": "patient_code",
+          "note": "先调 get_medical_card 拿患者编号（患者列表取默认/第一条）"
+        }
+      ],
       "success_ret": "",
       "error_ret": "",
       "system_only": false
     },
     {
       "name": "get_order",
-      "desc": "订单详情（需登录）→ {id, order_no, state, is_paid, dept_name, appointment_time}",
+      "desc": "订单详情（需登录）→ {id, order_no, state, is_paid, dept_name, appointment_time}；不传 order_id 时返回订单列表，传则返回该订单详情",
       "need_login": true,
       "params": {
-        "order_id": "订单 id"
+        "order_id": "订单 id（可不传，不传返回订单列表）"
       },
       "keywords": [
         "订单",
         "我的挂号",
         "预约记录"
       ],
+      "provides": {
+        "order_id": {
+          "desc": "订单 id，供 get_order_goods 使用；也用于查询订单详情",
+          "used_by": ["get_order_goods", "get_order"]
+        }
+      },
       "success_ret": "",
       "error_ret": "",
       "system_only": false
@@ -293,6 +469,14 @@
       "keywords": [
         "订单详情",
         "挂号详情"
+      ],
+      "requires": [
+        {
+          "param": "id",
+          "from": "get_order",
+          "field": "id",
+          "note": "先调 get_order 拿到订单 id"
+        }
       ],
       "success_ret": "",
       "error_ret": "",
@@ -311,6 +495,12 @@
         "协议",
         "须知"
       ],
+      "provides": {
+        "id": {
+          "desc": "公告 id，供 get_notice_detail 使用",
+          "used_by": ["get_notice_detail"]
+        }
+      },
       "success_ret": "",
       "error_ret": "",
       "system_only": false
@@ -326,6 +516,14 @@
         "公告详情",
         "协议内容",
         "挂号条款"
+      ],
+      "requires": [
+        {
+          "param": "news_id",
+          "from": "list_notices",
+          "field": "id",
+          "note": "先调 list_notices 拿到公告 id"
+        }
       ],
       "success_ret": "",
       "error_ret": "",

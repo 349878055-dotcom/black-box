@@ -58,48 +58,6 @@ public class MainActivity extends Activity {
     private static final int PHOTO_REQUEST = 1003;       // 聊天窗口拍照上传
     private Uri photoUri = null;                          // 拍照输出 Uri
 
-    // ── 手机端通用登录交互（方案②：登录在聊天里推送输入框/图形码，同步等用户输入）──
-    // loginLatch 阻塞 LoginCoordinator.run()（子线程），用户输入后 release 返回
-    private java.util.concurrent.CountDownLatch loginLatch = null;
-    private String loginResult = null;
-
-    /** 手机端全权登录的交互宿主：在聊天里推问题/图，同步等用户输入（LoginCoordinator 调）。 */
-    private final LoginCoordinator.Interactor loginInteractor = new LoginCoordinator.Interactor() {
-        @Override
-        public String askText(String title) {
-            return requestLoginInput(title, null);
-        }
-        @Override
-        public String showImageAndAsk(String base64, String title) {
-            return requestLoginInput(title, base64);
-        }
-    };
-
-    /** 在聊天里推登录问题（可选验证码图），阻塞等用户输入，返回输入（用户取消→null）。 */
-    private String requestLoginInput(final String question, final String image) {
-        final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
-        runOnUiThread(() -> {
-            loginLatch = latch;
-            loginResult = null;
-            String js = "if(window.__askLogin) window.__askLogin("
-                    + JSONObject.quote(question == null ? "" : question) + ","
-                    + JSONObject.quote(image == null ? "" : image) + ");";
-            try { uiWeb.evaluateJavascript(js, null); } catch (Exception ignore) {}
-        });
-        try {
-            if (!latch.await(120, java.util.concurrent.TimeUnit.SECONDS)) return null;
-        } catch (InterruptedException e) {
-            return null;
-        }
-        return loginResult;
-    }
-
-    /** ui.html 登录输入回传：用户输入后释放 latch（JsBridge.loginInput 调用）。 */
-    void onLoginInput(String value) {
-        loginResult = value == null ? "" : value;
-        if (loginLatch != null) loginLatch.countDown();
-    }
-
     // navigate / refresh 等真加载：挂一次性回调，onPageFinished 后再回执
     private String pendingNavCbId = null;
     private Runnable navTimeoutRunnable = null;
@@ -683,6 +641,13 @@ public class MainActivity extends Activity {
         w.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                // 拦截系统协议跳转（sms:/tel:/intent:/wxp 等）：避免 WebView 崩溃报
+                // ERR_UNKNOWN_URL_SCHEME（如美团登录页点"发送验证码"调 sms: 协议）。
+                // 验证码实际通过真实短信送达，这里直接吞掉跳转，页面保持正常。
+                if (url != null && (url.startsWith("sms:") || url.startsWith("tel:")
+                        || url.startsWith("intent:") || url.startsWith("weixin://"))) {
+                    return true;
+                }
                 // 支付：支付宝 scheme（alipays:// / alipay://）→ 直接拉起支付宝 App（桌面弹出）
                 if (url != null && (url.startsWith("alipays://") || url.startsWith("alipay://"))) {
                     try {
@@ -701,6 +666,10 @@ public class MainActivity extends Activity {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, android.webkit.WebResourceRequest request) {
                 String url = request != null ? request.getUrl().toString() : null;
+                if (url != null && (url.startsWith("sms:") || url.startsWith("tel:")
+                        || url.startsWith("intent:") || url.startsWith("weixin://"))) {
+                    return true;
+                }
                 if (url != null && (url.startsWith("alipays://") || url.startsWith("alipay://"))) {
                     try {
                         Intent i = Intent.parseUri(url, Intent.URI_INTENT_SCHEME);
@@ -715,6 +684,12 @@ public class MainActivity extends Activity {
                 return super.shouldOverrideUrlLoading(view, request);
             }
             @Override
+            public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+                super.onPageStarted(view, url, favicon);
+                // 注意：onPageStarted 注入 JS（mock 定位/webdriver）会干扰美团 H5 首页接口（"网络不给力"），
+                // 故不再自动注入。mock 定位改用页面内 eval 按需注入（meituan 脚本在 navigate 后调用）。
+            }
+            @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
                 if (addrEdit != null && url != null && !url.isEmpty()) {
@@ -727,6 +702,29 @@ public class MainActivity extends Activity {
                 // glyy 等老站自签名/老 TLS（net::ERR_SSL_VERSION_INTERFERENCE）必须放行，
                 // 与 SkillExecutor 的 trustAll 对齐；仅内置浏览器，不影响系统。
                 try { handler.proceed(); } catch (Exception ignore) {}
+            }
+            @Override
+            public void onReceivedError(WebView view, android.webkit.WebResourceRequest request,
+                                        android.webkit.WebResourceError error) {
+                super.onReceivedError(view, request, error);
+                // 主文档加载失败（DNS/断网/ERR_*）→ 立刻回执 navigate 失败，不再静默等 45s 超时
+                // 还误报成功；被重定向/取消（ERR_ABORTED=-3）不是真实失败，跳过。
+                if (request != null && request.isForMainFrame() && error != null
+                        && error.getErrorCode() != -3 /* ERR_ABORTED */) {
+                    String desc = error.getDescription() == null
+                            ? "网络错误" : error.getDescription().toString();
+                    failPendingNavigate("页面加载失败(" + error.getErrorCode() + "): " + desc);
+                }
+            }
+            @Override
+            public void onReceivedHttpError(WebView view, android.webkit.WebResourceRequest request,
+                                            android.webkit.WebResourceResponse errorResponse) {
+                super.onReceivedHttpError(view, request, errorResponse);
+                // 主文档返回 4xx/5xx（glyy 被云防护 504、403 等）→ 同样立刻回执失败，
+                // 云端收到后自动重试 / 引导手动打开。
+                if (request != null && request.isForMainFrame() && errorResponse != null) {
+                    failPendingNavigate("HTTP " + errorResponse.getStatusCode() + " 加载失败");
+                }
             }
         });
         w.setWebChromeClient(new WebChromeClient() {
@@ -858,6 +856,19 @@ public class MainActivity extends Activity {
             navTimeoutRunnable = null;
         }
         settleNavigate(cbId, false, 0);
+    }
+
+    /** 主文档加载失败（网络/HTTP 错误）→ 立刻回执 pending navigate 为失败，
+     *  避免静默等 45s 超时还误报成功（否则云端 _login_glyy 以为页面已打开）。 */
+    void failPendingNavigate(String reason) {
+        final String cbId = pendingNavCbId;
+        if (cbId == null) return;
+        pendingNavCbId = null;
+        if (navTimeoutRunnable != null) {
+            h.removeCallbacks(navTimeoutRunnable);
+            navTimeoutRunnable = null;
+        }
+        cbResult(cbId, "{\"ok\":false,\"error\":\"" + esc(reason) + "\"}");
     }
 
     /** readyState 轮询 + 短 settle，适配 SPA 晚渲染。 */
@@ -1003,8 +1014,6 @@ public class MainActivity extends Activity {
                 final String rid = reqId == null ? "" : reqId;
                 try {
                     SkillExecutor ex = new SkillExecutor(MainActivity.this);
-                    // 注入登录交互宿主：手机端全权处理登录（方案②），登录时在聊天里推送输入框/图形码
-                    ex.setLoginInteractor(loginInteractor);
                     String result = ex.execute(blueprintJson);
                     final String js = "window.__skillResult && window.__skillResult("
                             + JSONObject.quote(rid) + "," + result + ");";
@@ -1023,12 +1032,6 @@ public class MainActivity extends Activity {
             }).start();
         }
 
-        /** 手机端通用登录：用户输入回传（ui.html 登录输入框提交时调用，释放等待 latch）。 */
-        @JavascriptInterface
-        public void loginInput(String value) {
-            onLoginInput(value);
-        }
-
 
         /** 第 5 条：打开系统浏览器支付（App 内零收款，支付全流程在第三方收银台）。 */
         @JavascriptInterface
@@ -1041,8 +1044,16 @@ public class MainActivity extends Activity {
             } catch (Exception ignore) {}
         }
 
+        /** 切换当前云端账号：凭据库按 email 隔离读写。登录/恢复会话时由 ui.html 调用。 */
+        @JavascriptInterface
+        public void setActiveAccount(String email) {
+            try {
+                new CredentialStore(MainActivity.this).setActiveAccount(email);
+            } catch (Exception ignore) {}
+        }
+
         /** 第 4 条：把登录态写入手机本地凭据库（skill, kind=token|cookie|session|api_key, value）。
-         *  第三方登录态只存用户手机本地（用户自己的凭据），云端不聚合。 */
+         *  第三方登录态只存用户手机本地（用户自己的凭据），云端不聚合；写入当前 active 账号下。 */
         @JavascriptInterface
         public void saveCredential(String skill, String kind, String value) {
             try {
@@ -1055,7 +1066,7 @@ public class MainActivity extends Activity {
             } catch (Exception ignore) {}
         }
 
-        /** 授权中心：返回各平台登录态状态（供 ui.html「授权中心」显示；凭据只在本机，不外传）。
+        /** 授权中心：返回当前账号下各平台登录态（凭据只在本机，不外传）。
          *  返回 JSON：{skill: {name, category, kind, authorized}} */
         @JavascriptInterface
         public String getCredentials() {
@@ -1084,13 +1095,11 @@ public class MainActivity extends Activity {
             return o;
         }
 
-        /** 授权中心：清除指定平台登录态（退出登录）。 */
+        /** 授权中心：清除当前账号下指定平台登录态。 */
         @JavascriptInterface
         public void clearCredential(String skill) {
             try {
-                CredentialStore cs = new CredentialStore(MainActivity.this);
-                cs.setToken(skill, ""); cs.setCookie(skill, "");
-                cs.setSessionId(skill, ""); cs.setRefreshToken(skill, "");
+                new CredentialStore(MainActivity.this).clearSkill(skill);
             } catch (Exception ignore) {}
         }
 
@@ -1104,24 +1113,26 @@ public class MainActivity extends Activity {
                         case "export_cookies": {
                             // 导出当前网页登录态 cookies（用户自己的账号，用于后续请求保持登录）
                             String domain = p.optString("domain", "");
+                            // 第 4 条：登录态存手机本地凭据库（默认 tuniu；美团等传 skill=meituan_waimai）
+                            String skill = p.optString("skill", "tuniu");
                             if (domain.isEmpty()) {
                                 cbResult(cbId, "{\"ok\":false,\"error\":\"domain empty\"}");
                                 break;
                             }
                             try {
                                 String cookies = CookieManager.getInstance().getCookie(domain);
-                                // 第 4 条：登录态存手机本地凭据库（tuniu），云端不持有
                                 try {
-                                    new CredentialStore(MainActivity.this).setCookie("tuniu", String.valueOf(cookies));
+                                    new CredentialStore(MainActivity.this).setCookie(skill, String.valueOf(cookies));
                                 } catch (Exception ignore) {}
-                                // 同步写一份到 /sdcard/Download/tuniu_cookies.txt（供电脑 adb pull 读取/摸接口）
+                                // 同步写一份到 /sdcard/Download/<skill>_cookies.txt（供电脑 adb pull 读取/摸接口）
                                 try {
-                                    java.io.File f = new java.io.File("/sdcard/Download/tuniu_cookies.txt");
+                                    java.io.File f = new java.io.File("/sdcard/Download/" + skill + "_cookies.txt");
                                     java.io.FileOutputStream fos = new java.io.FileOutputStream(f);
                                     fos.write((domain + "\n" + String.valueOf(cookies)).getBytes("UTF-8"));
                                     fos.close();
                                 } catch (Exception ignore) {}
                                 cbResult(cbId, "{\"ok\":true,\"domain\":\"" + esc(domain)
+                                        + "\",\"skill\":\"" + esc(skill)
                                         + "\",\"cookies\":" + JSONObject.quote(String.valueOf(cookies)) + "}");
                             } catch (Exception e) {
                                 cbResult(cbId, "{\"ok\":false,\"error\":\"cookie err\"}");
@@ -1160,6 +1171,13 @@ public class MainActivity extends Activity {
                                         "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
                                         + "AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 "
                                         + "MicroMessenger/8.0.38(0x18002623) NetType/WIFI Language/zh_CN");
+                            } else if ("browser".equals(ua) || "default".equals(ua)) {
+                                // 真手机浏览器 UA（去掉 WebView 的 "; wv" 标志）：
+                                // 美团等站检测到 "; wv" 会识别为非标准浏览器，拒绝提交订单等高风险操作。
+                                browserWeb.getSettings().setUserAgentString(
+                                        "Mozilla/5.0 (Linux; Android 10; CLT-AL00 Build/HUAWEICLT-AL00) "
+                                        + "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.120 "
+                                        + "Mobile Safari/537.36");
                             } else {
                                 browserWeb.getSettings().setUserAgentString(webViewDefaultUA);
                             }
@@ -1431,6 +1449,19 @@ public class MainActivity extends Activity {
                             browserWeb.evaluateJavascript(READ_FRAMES_JS, value -> {
                                 String v = (value == null || value.equals("null")) ? "[]" : value;
                                 cbResult(cbId, "{\"ok\":true,\"frames\":" + v + "}");
+                            });
+                            break;
+                        }
+                        case "eval": {
+                            // 注入任意 JS 到内置浏览器（读 DOM/点加购/提取数据）。js 为 JSON 字符串里的 JS 源码。
+                            String js = p.optString("js", "");
+                            if (js.isEmpty()) {
+                                cbResult(cbId, "{\"ok\":false,\"error\":\"js empty\"}");
+                                break;
+                            }
+                            browserWeb.evaluateJavascript(js, value -> {
+                                String v = (value == null || value.equals("null")) ? "" : value;
+                                cbResult(cbId, "{\"ok\":true,\"result\":" + v + "}");
                             });
                             break;
                         }

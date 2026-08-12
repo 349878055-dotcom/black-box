@@ -22,14 +22,21 @@
 - 登录需**真人配合**：在微信小程序「南京市浦口区中医院」内授权产生 code/encrypted_data/iv（一次性、会过期）
 - 登录态 = Bearer access_token，存手机授权中心；过期需重新授权
 
+## 原子化 + 编码自动补全（本 skill 的设计）
+- 全部方法都是**原子单元**，依赖关系写在 `contract.json` 的 `provides` / `requires` / `match` / `pass_params` 里。
+- **编码由系统自动补齐**：`register_online` 需要的 dept_code / doctor_code / schedule_id 等，系统自动现调 `list_depts` / `list_dept_doctors` / `get_schedule` / `get_medical_card`，**用用户/ AI 给的名字（科室名/医生名）精确匹配**后填入，AI 不需要抄编号。
+- **匹配不到就明确报错**：如医生名在名单里找不到，skill_run 返回「未找到匹配项，请确认名称」，不会真的挂号。
+- 科室两级结构：匹配时先 list_depts 锁定科室，再查医生/排班（禁止跳过前置直接编造编码）。
+
 ## 核心难点 / 坑（给维护者看）
-1. 科室是**两级结构**：查医生/排班必须先 list_depts 拿真实 dept_code（父子），禁止凭猜
+1. 科室是**两级结构**：查医生/排班必须先有真实 dept_code；系统自动用科室名在 list_depts 里精确匹配（父子），匹配不到不编造
 2. 在线号/挂号类接口必须用 ONLINE_AGENT_ID（62da65d4e4b0e0a247890d84），用普通 agent 返回「应用系统繁忙」
 3. 接口需微信 UA + sign 签名（SHA1(MD5(appKey+ts+nonce))），错一个就失败
 4. 签名类型复用手机端 `glyy_sha1_md5`，手机 SkillExecutor 已支持，无需改 App
+5. 患者姓名/身份证不从接口返回（get_medical_card 只给 patient_code），需用户提供或问询
 
 ## 使用流程（老百姓视角）
-问（要看哪个科/医生）→ 查（科室→医生→可约日期→排班→时段）→ 微信授权登录 → 提交（在线挂号）→ 查订单/就诊卡。
+问（要看哪个科/医生）→ 查（科室→医生→可约日期→排班→时段）→ 微信授权登录 → 提交（在线挂号，编码由系统补齐）→ 查订单/就诊卡。
 
 ## 使用要求
 - 手机 App 在线

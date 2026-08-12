@@ -369,6 +369,7 @@
   <div class="main">
     <div class="topbar">
       <button class="menu-btn" onclick="showView('list')" title="对话列表">☰</button>
+      <button class="menu-btn" onclick="showBrowserBtn()" title="打开内置浏览器">🌐</button>
       <button class="menu-btn" id="backBtn" onclick="showView('chat')" style="display:none" title="返回对话">←</button>
       <div class="db-title">
         <div class="title" id="viewTitle">虾米</div>
@@ -1037,12 +1038,99 @@ function renderThemePickers() {
 }
 
 // 云端地址入口已从设置页移除（生产不可改后端地址）；saveBase/exportCookies 相关死代码已清理
-// ═══ 会话状态机（一个才艺 = 一个独立窗口）═══
+// ═══ 多账号本地隔离（会话/资料/原生凭据均挂当前 email）═══
+function currentEmail() {
+  return (localStorage.getItem('xiami_email') || '').trim().toLowerCase();
+}
+function sessionsStorageKey(email) {
+  const em = (email || currentEmail()).trim().toLowerCase();
+  return em ? ('xiami_sessions_' + em) : 'xiami_sessions';
+}
+function profileStorageKey(email) {
+  const em = (email || currentEmail()).trim().toLowerCase();
+  return em ? ('xiami_profile_' + em) : 'xiami_profile';
+}
+function isLoggedIn() {
+  return !!(S.token || localStorage.getItem('xiami_token') || localStorage.getItem('xiami_refresh'));
+}
+/** 旧版全局 key → 当前账号 key（仅目标为空时迁一次） */
+function migrateLegacyLocal(email) {
+  const em = (email || '').trim().toLowerCase();
+  if (!em) return;
+  try {
+    if (!localStorage.getItem('xiami_sessions_' + em)) {
+      const legacy = localStorage.getItem('xiami_sessions');
+      if (legacy) {
+        localStorage.setItem('xiami_sessions_' + em, legacy);
+        localStorage.removeItem('xiami_sessions');
+      }
+    }
+    if (!localStorage.getItem('xiami_profile_' + em)) {
+      const legacy = localStorage.getItem('xiami_profile');
+      if (legacy) {
+        localStorage.setItem('xiami_profile_' + em, legacy);
+        localStorage.removeItem('xiami_profile');
+      }
+    }
+  } catch (e) {}
+}
+function notifyActiveAccount(email) {
+  try {
+    if (window.AndroidBridge && window.AndroidBridge.setActiveAccount) {
+      window.AndroidBridge.setActiveAccount((email || '').trim().toLowerCase());
+    }
+  } catch (e) {}
+}
+/**
+ * 切换本地账号柜：先把当前内存会话落到旧邮箱，再加载新邮箱的 sessions/profile，并通知原生凭据库。
+ * @param {string} newEmail 新账号；空串=登出（清内存、原生 active 置空）
+ * @param {string} [prevEmail] 切换前邮箱（doLogin 在写 xiami_email 前传入）
+ */
+function switchLocalAccount(newEmail, prevEmail) {
+  const neu = (newEmail || '').trim().toLowerCase();
+  const prev = (prevEmail != null ? prevEmail : currentEmail()).trim().toLowerCase();
+  if (S._sessLoaded && prev && prev !== neu) {
+    try { saveSessionsTo(prev); } catch (e) {}
+  }
+  S._sessLoaded = false;
+  S.sessions = {};
+  S.activeSessId = '';
+  if (neu) {
+    migrateLegacyLocal(neu);
+    notifyActiveAccount(neu);
+  } else {
+    notifyActiveAccount('');
+  }
+}
+function saveSessionsTo(email) {
+  try {
+    const snap = {};
+    Object.keys(S.sessions || {}).forEach(sid => {
+      const s = S.sessions[sid];
+      snap[sid] = Object.assign({}, s, {
+        messages: (s.messages || []).map(m => {
+          if (m.img) return Object.assign({}, m, { img: null });
+          return m;
+        }),
+      });
+    });
+    localStorage.setItem(sessionsStorageKey(email), JSON.stringify(snap));
+  } catch (e) {}
+}
+// ═══ 会话状态机（一个才艺 = 一个独立窗口；按账号隔离）═══
 function loadSessions() {
   // 内存为唯一真相：仅首次从 localStorage 加载；此后不再全量重读覆盖内存（避免未落盘改动丢失）
   if (S._sessLoaded) return;
   S._sessLoaded = true;
-  try { S.sessions = JSON.parse(localStorage.getItem('xiami_sessions') || '{}'); }
+  // 未登录不加载任何账号柜（xiami_email 仅用于登录框回填，不能当身份）
+  if (!isLoggedIn()) {
+    S.sessions = {};
+    S.activeSessId = '';
+    return;
+  }
+  const em = currentEmail();
+  if (em) migrateLegacyLocal(em);
+  try { S.sessions = JSON.parse(localStorage.getItem(sessionsStorageKey(em)) || '{}'); }
   catch (e) { S.sessions = {}; }
   if (!S.sessions || typeof S.sessions !== 'object') S.sessions = {};
   // 不自动补默认会话（用户删除后保持彻底删除）；无有效会话时 activeSessId 置空
@@ -1053,18 +1141,10 @@ function loadSessions() {
 }
 function saveSessions() {
   try {
-    // 图片消息（验证码 base64）不持久化：保存时剥掉 img 字段，避免撑爆 localStorage
-    const snap = {};
-    Object.keys(S.sessions).forEach(sid => {
-      const s = S.sessions[sid];
-      snap[sid] = Object.assign({}, s, {
-        messages: (s.messages || []).map(m => {
-          if (m.img) return Object.assign({}, m, { img: null });
-          return m;
-        }),
-      });
-    });
-    localStorage.setItem('xiami_sessions', JSON.stringify(snap));
+    if (!isLoggedIn()) return;
+    const em = currentEmail();
+    if (!em) return; // 未登录不落盘，避免写到全局串号 key
+    saveSessionsTo(em);
   } catch (e) {}
 }
 function curSess() {
@@ -1467,8 +1547,17 @@ function md(raw) {
   if (tbl) html += '</table>';
   return html;
 }
-// 🌐 浏览器由系统在需要时自动弹出；showBrowserBtn 保留为空操作兼容
-function showBrowserBtn() { /* 浏览器自动弹出，无需手动按钮 */ }
+// 🌐 浏览器入口：切到内置浏览器视图（顶部栏 ☰ 旁 🌐 按钮 + 登录/验证码提示时调用）。
+// 原生 AndroidBridge.showBrowserCurrent() 切到浏览器（不重载当前页）；
+// 兼容无原生 bridge 的预览环境。
+function showBrowserBtn() {
+  if (window.AndroidBridge && window.AndroidBridge.showBrowserCurrent) {
+    try { window.AndroidBridge.showBrowserCurrent(); return; } catch (e) {}
+  }
+  if (window.AndroidBridge && window.AndroidBridge.showBrowser) {
+    try { window.AndroidBridge.showBrowser(''); } catch (e) {}
+  }
+}
 
 // ═══ 登录 ═══
 async function doLogin(isRegister) {
@@ -1483,6 +1572,10 @@ async function doLogin(isRegister) {
     if (isRegister) Object.assign(body, { password_confirm: pass, nickname: email.split('@')[0] });
     const r = await api('/api/v1/auth/' + (isRegister ? 'register' : 'login'), { method:'POST', body: JSON.stringify(body) });
     if (r && r.ok === false) throw new Error(r.detail || '操作失败');
+    const prevEmail = currentEmail();
+    const neu = email.trim().toLowerCase();
+    // 先切本地柜（落盘旧账号会话 → 载入新账号），再写登录态
+    switchLocalAccount(neu, prevEmail);
     S.token = r.access_token;
     S.userId = r.user_id || email;      // 新主键 user_id（UUID）
     S.deviceId = email;                  // 设备通道/业务隔离键保持 email（云端 master/bridge 按 email 路由）
@@ -1490,6 +1583,8 @@ async function doLogin(isRegister) {
     localStorage.setItem('xiami_token', S.token);
     localStorage.setItem('xiami_refresh', r.refresh_token || '');
     localStorage.setItem('xiami_email', email);
+    loadSessions();
+    renderConvList();
     $('connModal').classList.remove('show');
     setConn('设备在线');
     showBrowserBtn();
@@ -1515,22 +1610,23 @@ function setConn(txt) {
 }
 
 function doLogout() {
-  // 尽力吊销服务端 refresh token，再清本地
+  // 尽力吊销服务端 refresh token，再清本地登录态；本机按账号归档的 sessions/profile/凭据保留，供下次同账号登录恢复
   const rt = localStorage.getItem('xiami_refresh');
   if (rt) { try { fetch(S.base + '/api/v1/auth/logout', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ refresh_token: rt }) }); } catch(e){} }
   closeAccount();
+  const prev = currentEmail();
+  if (S._sessLoaded && prev) { try { saveSessionsTo(prev); } catch (e) {} }
+  switchLocalAccount('', prev); // 原生 active 置空，内存会话清空（不串到下一账号）
   S.token=''; S.userId=''; S.deviceId=''; S.curSkill=null;
   if (S.ws) { try { S.ws.close(); } catch(e){} S.ws = null; }
   if (S.timer) clearInterval(S.timer); S.timer=null;
   localStorage.removeItem('xiami_token');
   localStorage.removeItem('xiami_refresh');
+  // 保留 xiami_email 仅用于登录框回填；本地数据已按账号分柜，不再当作「当前在线身份」
   $('connModal').classList.add('show');
   setConn('未登录');
   $('chatInner').innerHTML = welcomeHtml();
   _chatSig = '';
-  loadSessions();
-  const _k = Object.keys(S.sessions);
-  S.activeSessId = _k[0] || '';
   renderConvList();
 }
 
@@ -1823,7 +1919,10 @@ const PROFILE_FIELDS = [
 ];
 function getProfile() {
   try {
-    const v = localStorage.getItem('xiami_profile') || '{}';
+    if (!isLoggedIn()) return {};
+    const em = currentEmail();
+    if (em) migrateLegacyLocal(em);
+    const v = localStorage.getItem(profileStorageKey(em)) || '{}';
     const p = JSON.parse(v);
     return (p && typeof p==='object') ? p : {};
   } catch (e) { return {}; }
@@ -1842,8 +1941,11 @@ function profileBoxHtml() {
 async function saveProfile() {
   const p = {};
   PROFILE_FIELDS.forEach(([k]) => { const el = $('pf_'+k); if (el) p[k] = el.value.trim(); });
-  localStorage.setItem('xiami_profile', JSON.stringify(p));
-  // 用户铁律：个人信息只存本机（localStorage），不传云端聚合
+  if (!isLoggedIn()) { alert('请先登录'); return; }
+  const em = currentEmail();
+  if (!em) { alert('请先登录'); return; }
+  localStorage.setItem(profileStorageKey(em), JSON.stringify(p));
+  // 用户铁律：个人信息只存本机（localStorage），不传云端聚合；按账号分柜
   appendMsg('bot', '✅ 已保存到个人资料中心（' + (p.realname||p.username||'未填') + '）');
   loadMe();
 }
@@ -1852,9 +1954,10 @@ async function loadMe() {
   try {
     const r = await api('/api/v1/me');
     const u = r.user || {}, mine = r.skills || [];
-    // 云端 profile 有而本地没有 → 拉回来（换机/重装恢复）
+    // 云端 profile 有而本地没有 → 拉回来（换机/重装恢复）；写入当前账号柜
     if (r.profile && Object.keys(r.profile).length && Object.keys(getProfile()).length === 0) {
-      localStorage.setItem('xiami_profile', JSON.stringify(r.profile));
+      const em = currentEmail();
+      if (em) localStorage.setItem(profileStorageKey(em), JSON.stringify(r.profile));
     }
     const nm = u.nickname || (u.email||'').split('@')[0] || '用户';
     const initial = esc((nm.trim()[0] || '虾').toUpperCase());
@@ -1945,9 +2048,6 @@ document.addEventListener('focusin', function(e) {
   // 云端地址：优先本地存储已存的值，否则默认腾讯云（本地演示可先存局域网地址）
   S.base = localStorage.getItem('xiami_base') || 'http://140.143.144.28';
   localStorage.setItem('xiami_base', S.base);
-  // 恢复/初始化会话状态机（多窗口）+ 左滑删除
-  loadSessions();
-  renderConvList();
   bindConvLongPress();
   bindViewSwipe();
   const tok = localStorage.getItem('xiami_token');
@@ -1956,6 +2056,14 @@ document.addEventListener('focusin', function(e) {
   if (email) $('email').value = email;
   if (tok || rt) {
     S.token = tok || '';
+    const em = (email || '').trim().toLowerCase();
+    if (em) {
+      migrateLegacyLocal(em);
+      notifyActiveAccount(em);
+    }
+    S._sessLoaded = false;
+    loadSessions();
+    renderConvList();
     $('connModal').classList.remove('show');
     setConn('验证登录…');
     // 持久态：只有服务端明确判定 token/refresh 无效才清除；网络瞬断则保留登录态进入离线并自动重试，
@@ -1966,6 +2074,11 @@ document.addEventListener('focusin', function(e) {
         const u = r.user || {};
         S.userId = u.user_id || u.email || '';   // 新主键 user_id（UUID）
         S.deviceId = u.email || email;            // 设备通道键保持 email
+        const em2 = (u.email || email || '').trim().toLowerCase();
+        if (em2) {
+          if (currentEmail() !== em2) localStorage.setItem('xiami_email', u.email || email);
+          notifyActiveAccount(em2);
+        }
         setConn('设备在线');
         showBrowserBtn();
         connectWS();
@@ -1976,9 +2089,13 @@ document.addEventListener('focusin', function(e) {
         const bad = /401|403|未提供|无效|过期|令牌/i.test(msg);
         if (bad) {
           // 服务端明确判定 token/refresh 无效 → 清除并要求重新登录
+          const prev = currentEmail();
+          if (S._sessLoaded && prev) { try { saveSessionsTo(prev); } catch (err) {} }
+          switchLocalAccount('', prev);
           S.token=''; localStorage.removeItem('xiami_token'); localStorage.removeItem('xiami_refresh');
           $('connModal').classList.add('show');
           setConn('未登录');
+          renderConvList();
         } else {
           // 网络/暂时性错误 → 保留 token，进入离线态；最多重试 5 次（每 5s），网络恢复自动登录
           if (n < 5) setTimeout(() => tryValidate(n + 1), 5000);
@@ -1990,7 +2107,12 @@ document.addEventListener('focusin', function(e) {
     };
     tryValidate(0);
   } else {
-    // 游客模式：未登录也进入主界面（豆包式）；点顶部状态可登录/注册
+    // 游客模式：未登录也进入主界面；不加载任何账号的本地会话/凭据
+    notifyActiveAccount('');
+    S._sessLoaded = true;
+    S.sessions = {};
+    S.activeSessId = '';
+    renderConvList();
     setConn('未登录');
     showView('chat');
   }
