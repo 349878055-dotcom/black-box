@@ -1,76 +1,23 @@
-# 美团外卖 Skill（meituan_waimai）—— 唯一说明文档
+# 美团外卖（路径 B：只交美团 App 订单链接）
 
-> **以 2026-08-12 真机实测为准**。所有结论来自真机验证，不含未验证推断。
-> 历史调试中间结论（"工程师太忙"/F404/IP地域 等）已被最终实测推翻，一律不采纳。
+> 登录态、代下单、代支付全部砍掉。微信小程序 / H5 只探路。
 
-## 〇、核心一句话（先看这个）
+## 三问（已定死）
 
-**在虾米内置浏览器里，美团 H5 能正常：看店、搜索、点菜、加购、结算预览。**
-**但一点"提交订单"，页面就"又返回"（下单失败跳回结算页/报错）——下不了单。**
-→ 所以内置浏览器只能做到"下单前"，**提交订单这一下过不去**；支付（微信）更触发不了。
-
-## 一、能力与实测状态
-
-| 环节 | 实现方式 | 实测状态 |
-|---|---|---|
-| 搜店/看菜单 | **浏览器 H5**（`h5.waimai.meituan.com`） | ✅ 已通 |
-| 登录 | 手机号+验证码（H5，`18913300200`） | ✅ 已通 |
-| 加购/购物车 | 浏览器 H5 | ✅ 已通 |
-| 结算预览 | `i.waimai.meituan.com/openh5/order/v2/preview` | ✅ 200 |
-| **提交订单** | `i.waimai.meituan.com/openh5/order/v2/submit` | ❌ **点提交就"又返回"（403 失败回退）** |
-| 查单 | `wx-shangou.meituan.com/wxapp/v1/order/getuserorders` | ✅ 200 `[]` |
-| **支付** | 微信小程序 JSAPI（`wx.requestPayment`） | ❌ 虾米 WebView 无法触发 |
-
-**结论**：看店/搜索/点菜/加购/结算/查单 已通；**提交订单点下去就"又返回"（内置浏览器过不去）**；**支付必须真微信**。
-
-## 二、域名（实测确认）
-
-| 域名 | 用途 | 实测 |
-|---|---|---|
-| `h5.waimai.meituan.com` | H5 页面（唯一 H5 入口） | ✅ 打开 |
-| `i.waimai.meituan.com` | H5 后端（openh5）：preview 200 / **submit 403** | ✅/❌ |
-| `wx.waimai.meituan.com` | 微信小程序（weapp）：submit/pay **200**（PC微信） | ✅ |
-| `wx-shangou.meituan.com` | 小程序业务（wxapp）：getuserorders 200 / **search 403** | ✅/❌ |
-| `web.meituan.com` | 无效入口 | 404 |
-
-## 三、核心结论（实测为准，无冲突）
-
-1. **提交订单 403 根因 = openh5 通道 mtgsig 风控签名**（绑定浏览器指纹），虾米 WebView 算不出有效签名。
-   - 已排除：UA（wv/browser）、指纹伪装、注入、餐具未选 —— 均仍 403。
-   - **走 weapp 通道（真微信）能下单**（`wx.waimai.meituan.com/weapp/v6/order/submit` 实测 200，海外 IP 也行）。
-2. **支付 = 微信小程序 JSAPI**（`wx.requestPayment`），必须真微信；虾米 WebView 无法触发。
-3. **搜店 API 被 403 拦**，实际靠浏览器 H5 实现。
-4. **登录态**：H5 cookie（openh5）/ 微信小程序态（weapp）/ App token 三通道**不互通**，别混用。
-
-## 四、登录态
-
-- **H5**：手机号 `18913300200` + 验证码；cookie 存凭据库 `meituan_waimai`（含 userId/u/token/JSESSIONID）
-- **微信**：真微信环境登录态（PC 微信实测可下单）
-- **App**：真机美团 App 登录 + 抓通信拿 token/uuid（后期方向）
-- **坑**：别删 dfp 设备指纹；位置需 pickedpoi/geopoi（海外 mock 南京雨山美地 32.055946,118.607651）
-
-## 五、环境坑（实测速查）
-
-| 坑 | 解法 |
+| 问 | 答 |
 |---|---|
-| 默认 UA 进店菜单"出现点问题" | 用**微信 UA**（交易环节必需） |
-| onPageStarted 注入 JS 破坏 H5（首页"网络不给力"） | 用 **eval 按需注入** mock 定位 |
-| JS 模拟点击对按钮无效 | 需**真实触摸**（isTrusted=true） |
-| 海外手机拿不到国内定位 | eval 注入 mock 定位 |
-| 清缓存破坏美团 | 只清购物车/订单类，**别删 dfp** |
+| 探路用什么 | 微信缓存（wxapkg）挖**去缓存的 API**；H5 看店 |
+| 登录态有什么 | **放弃**。真浏览器能过风控，我们内置浏览器过不了（mtgsig）；登录在美团 App 里 |
+| 交付是什么 | `imeituan://www.meituan.com/takeout/food?poi_id=...`，壳原生拉起**美团 App** 进该店点餐页 |
 
-## 六、后续方向（以"客户只点支付确认"为目标）
+## 为什么走 B
 
-- **下单/支付**：API 生成订单链接 → 返回客户 → 客户微信/Safari 打开 → 确认订单+支付（客户唯一动作）
-- **自动下单暗号**：unidbg（`irabbit666666/unidbg-mt-server23`）服务端生成 mtgsig（App 版），或走 weapp 通道
-- **登录态**：App 版 token（真机美团 App 登录 + 抓通信）
+去缓存的 API 有，真浏览器甚至能下单。但过风控要**真实浏览器**，内置浏览器提交订单 403（mtgsig）；支付还锁微信 JSAPI。真 Chrome 能过 ≠ 我们能过 → 不冲 A，登录和支付全砍，只交美团 App 连接。
 
-## 七、环境信息
+## 客户动作
 
-- 远程云端：`140.143.144.28`，端口 19000，systemd `shimeban-cloud.service`
-- 虾米账号：`349878055@qq.com`（设备通道键同账号）
-- 应用日志：远程 `/home/ubuntu/xiami/cloud/service.log`
+搜店/看菜单 → 生成订单 scheme → 点一下 → 美团 App 弹出该店 → 客户自己登录、下单、付钱。
 
-## 八、使用流程（老百姓视角）
+壳：Android `Intent` + `package=com.sankuai.meituan`；iOS `openURL`（声明 `imeituan`）。禁止丢进 WebView。未装美团可试外卖 App scheme（`meituanwaimai://`）；都没有才应用商店。
 
-问（想吃什么/哪家店）→ 查（H5 搜店→菜单）→ 手机号验证码登录 → 加购→结算（已通）→ 生成订单链接 → 客户打开确认+支付。
+禁止只给美团首页。

@@ -1,44 +1,48 @@
 {
   "id": "meituan_waimai",
   "name": "美团外卖",
-  "site": "微信小程序（appid wxde8ac0a21135c07d，v1563）",
+  "site": "探路：微信小程序（appid wxde8ac0a21135c07d）/ H5（h5.waimai.meituan.com）；交付：美团 App（scheme imeituan://，package com.sankuai.meituan）",
   "base": "https://i.waimai.meituan.com",
-  "login_base": "https://passport.meituan.com",
-  "intent": "搜店铺/看菜单/点餐 → 手机号验证码登录 → 下单 → 查订单/取消",
+  "intent": "查询：搜店铺/看菜单（探路拿 poi_id）+ 路径 B：生成美团 App 订单/点餐 scheme → 壳原生拉起美团 App 进该店点餐页 → 客户在 App 内自己登录、下单、支付（系统不持有登录态、不代付）",
   "category": "本地生活·餐饮",
-  "intro": "美团外卖：查店铺/菜单，手机号验证码登录后下单、查订单、取消订单",
-  "capability": "operate_sms",
-  "capability_note": "第0步：登录=手机号+验证码（非微信独占授权，真人配合收码）；下单等操作可代做。⚠️真下单有副作用须客户确认；美团有滑块/设备指纹风控 → 必须走手机通道（Device-as-Proxy）。",
+  "intro": "美团外卖：查店/菜单；操作只交美团 App 订单链接（路径 B）。不做登录、不下单、不代支付。",
+  "capability": "query",
+  "capability_note": "路径 B：放弃登录 + 支付。查店铺/菜单（拿 poi_id）；操作交 imeituan:// 明文 scheme，壳原生拉起美团 App 进该店点餐页，客户在 App 内自行登录、确认、付钱。不代登录、不代下单、不代支付；微信 JSAPI/小程序/卡包不交。",
   "notes": [
-    "来源：微信小程序 wxapkg 解包（appid wxde8ac0a21135c07d v1563）；主 API=i.waimai.meituan.com，登录=passport.meituan.com",
-    "登录：POST /api/v3/account/mobileloginapply（发验证码）→ /api/v3/account/mobilelogin（登录换 token）→ /refresh_token 续期",
-    "⚠️ 参数/请求头/签名多为骨架，标注『待真机验证』：以手机通道真实响应为准，禁 mock",
-    "风控：yoda 滑块/图形验证（i.meituan.com/account/appcaptcha）+ risk_app=216/fingerprint/uuid → 云端直连会被拦",
-    "坑：下单必须走手机通道；提交订单(/order/submit)有副作用须确认；支付在手机端完成"
+    "三问：探路用什么=微信缓存（wxapkg）挖出去缓存的 API + H5 看店；登录态有什么=放弃（内置浏览器过不了 mtgsig 风控，真浏览器能过也不算我们能过；登录在美团 App 里）；交付是什么=imeituan:// 拉起美团 App 进该店点餐页。",
+    "来源：微信小程序 wxapkg 解包（appid wxde8ac0a21135c07d）只用于探路；微信小程序/JSAPI 不能当交付。",
+    "实测：H5 能看店/搜索/点菜，提交订单 403（mtgsig 风控）；支付锁微信 JSAPI → 虾米拉不起。故砍掉登录态和支付，改路径 B。",
+    "交付 = 明文 scheme（imeituan://www.meituan.com/takeout/food?poi_id=...），壳 Android Intent package=com.sankuai.meituan / iOS openURL。禁止丢进 WebView。未装美团才兜底应用商店。",
+    "禁止指路式：必须落到该店点餐页，禁止只给美团首页。登录/选菜/下单/支付都在美团 App 内客户自做。",
+    "scheme 路径以真机拉起为准；备选美团外卖独立 App：meituanwaimai://waimai.meituan.com/menu?poi_id_str=...（package com.sankuai.meituan.takeoutnew）。",
+    "2026-08-13 真机实测：美团外卖分享链接带 poi_id_str（字符串，如 RAaoghh37yUDcjUoIWxv8gI）；scheme meituanwaimai://waimai.meituan.com/menu?poi_id_str=... 唤起成功，登录后直达该店菜单页（不再跳登录）；到结算需客户在 App 内选菜加购（结算依赖购物车）。"
   ],
   "auth": {
-    "required": true,
-    "kind": "token",
-    "how": "access_token（字段名/位置待真机验证）；可 refresh_token 续期",
-    "how_to_get": "手机号+验证码：mobileloginapply 发码 → mobilelogin 登录（可能先过滑块/图形验证）→ token 存手机凭据库",
-    "login_site": "美团外卖小程序登录页"
+    "required": false,
+    "kind": "none",
+    "how": "查询不持有登录态；下单/支付由客户在美团 App 内用自己的账号完成（系统不代做）",
+    "how_to_get": "客户点订单 scheme → 拉起美团 App → 用自己的账号登录 → 该店点餐页自行下单支付"
   },
   "human_touch": [
-    "登录：短信验证码（真人收码）",
-    "登录：滑块/图形验证码（yoda 风控，真人过）",
-    "真下单 / 退款前客户确认",
-    "支付在手机端完成"
+    "路径 B：客户点链接 → 美团 App 内自己登录、下单、支付（系统不代做）"
   ],
   "not_deliver": [
-    "自动破解图形/滑块验证码",
-    "未经客户确认的真下单",
-    "云端直连下单（风控必拦，走手机通道）"
+    "登录态代做（短信/token/cookie 一律不持有）",
+    "代下单 / 代支付 / 拉起微信支付（JSAPI 必须真微信，交不了）",
+    "微信小程序 / 卡包 / URL Link / wx.requestPayment",
+    "只给美团首页的指路式链接"
+  ],
+  "aliases": [
+    "美团外卖",
+    "点外卖",
+    "美团"
   ],
   "flow": [
     {
       "step": 1,
-      "title": "① 搜店/看菜单（查店铺/菜单/菜品）",
+      "title": "① 查店/菜单（探路拿 poi_id）",
       "methods": [
+        "homepage",
         "search_poi",
         "get_poi_info",
         "get_product_list",
@@ -47,61 +51,17 @@
     },
     {
       "step": 2,
-      "title": "② 手机号验证码登录（真人配合收码）",
+      "title": "② 生成美团 App 订单链接（路径 B）",
       "methods": [
-        "login_apply",
-        "login"
-      ]
-    },
-    {
-      "step": 3,
-      "title": "③ 下单（预览→提交订单，⚠️真操作须确认）",
-      "methods": [
-        "sync_cart",
-        "get_cart_info",
-        "get_address_list",
-        "preview_order",
-        "submit_order"
-      ]
-    },
-    {
-      "step": 4,
-      "title": "④ 查单/取消订单",
-      "methods": [
-        "get_orders",
-        "get_order_detail",
-        "cancel_order"
+        "generate_order_link"
       ]
     }
   ],
-  "login": {
-    "method": "sms_verify",
-    "display": "美团外卖",
-    "steps": {
-      "send_sms": {
-        "method": "login_apply",
-        "params": {
-          "mobile": "{phone}"
-        }
-      },
-      "login": {
-        "method": "login",
-        "params": {
-          "mobile": "{phone}",
-          "verify_code": "{sms_code}"
-        }
-      }
-    },
-    "interact": {
-      "phone": "请输入手机号，完成美团外卖登录",
-      "sms_code": "短信已发送，请输入收到的验证码"
-    }
-  },
   "methods": [
     {
       "name": "homepage",
-      "desc": "首页店铺列表 → wx-shangou.meituan.com/wxapp/v2/poi/homepage（绕开搜店 403）。返回含 poi_id 的店铺列表。poi_id 供 get_poi_info/get_product_list/submit_order 使用",
-      "need_login": true,
+      "desc": "首页店铺列表 → wx-shangou.meituan.com/wxapp/v2/poi/homepage。返回含 poi_id 的店铺列表，供 generate_order_link 使用",
+      "need_login": false,
       "params": {},
       "keywords": [
         "首页",
@@ -110,8 +70,8 @@
       ],
       "provides": {
         "poi_id": {
-          "desc": "店铺 id，供 get_poi_info/get_product_list/preview_order/submit_order 使用",
-          "used_by": ["get_poi_info", "get_product_list", "preview_order", "submit_order"]
+          "desc": "店铺 id，供 get_poi_info/get_product_list/generate_order_link 使用",
+          "used_by": ["get_poi_info", "get_product_list", "generate_order_link"]
         }
       },
       "success_ret": "",
@@ -120,8 +80,8 @@
     },
     {
       "name": "search_poi",
-      "desc": "搜店铺 → wx-shangou.meituan.com/wxapp/v2/search/v9/poiwithfilter（search 系被 openresty 403，可改用 homepage）。返回 [{poi_id, name, ...}]。poi_id 供 get_poi_info/get_product_list/submit_order 使用",
-      "need_login": true,
+      "desc": "搜店铺 → wx-shangou.meituan.com/wxapp/v2/search/v9/poiwithfilter（search 系可能 403，可改用 homepage）。返回 [{poi_id, name, ...}]。poi_id 供 generate_order_link 使用",
+      "need_login": false,
       "params": {
         "keyword": "店铺名/搜索词",
         "city_id": "城市id（待验证）",
@@ -136,12 +96,8 @@
       ],
       "provides": {
         "poi_id": {
-          "desc": "店铺 id，供 get_poi_info/get_product_list/preview_order/submit_order 使用",
-          "used_by": ["get_poi_info", "get_product_list", "preview_order", "submit_order"]
-        },
-        "poi_name": {
-          "desc": "店铺名，供 submit_order 使用（用名字精确匹配锁定）",
-          "used_by": ["submit_order"]
+          "desc": "店铺 id，供 get_poi_info/get_product_list/generate_order_link 使用",
+          "used_by": ["get_poi_info", "get_product_list", "generate_order_link"]
         }
       },
       "success_ret": "店铺列表",
@@ -150,7 +106,7 @@
     },
     {
       "name": "get_poi_info",
-      "desc": "店铺信息 → /weapp/v7/poi/info（待真机验证参数）。返回店铺详情/营业状态等",
+      "desc": "店铺信息 → /wxapp/v1/poi/info。返回店铺详情/营业状态等",
       "need_login": false,
       "params": {
         "poi_id": "店铺 id"
@@ -173,7 +129,7 @@
     },
     {
       "name": "get_product_list",
-      "desc": "店铺菜单/菜品列表 → /weapp/shop/v1/poi/productlist（待真机验证参数）。返回菜品 [{product_id, name, price, ...}]",
+      "desc": "店铺菜单/菜品列表 → /wxapp/v1/poi/food。返回菜品 [{product_id, name, price, ...}]",
       "need_login": false,
       "params": {
         "poi_id": "店铺 id"
@@ -191,19 +147,13 @@
           "note": "先 search_poi 拿真实 poi_id"
         }
       ],
-      "provides": {
-        "product_id": {
-          "desc": "菜品 id，供 sync_cart/submit_order 使用",
-          "used_by": ["sync_cart", "submit_order"]
-        }
-      },
       "success_ret": "",
       "error_ret": "",
       "system_only": false
     },
     {
       "name": "get_product_detail",
-      "desc": "菜品详情 → /weapp/v7/poi/product/detail（待真机验证参数）。返回菜品规格/价格/库存",
+      "desc": "菜品详情 → /weapp/v7/poi/product/detail。返回菜品规格/价格/库存",
       "need_login": false,
       "params": {
         "product_id": "菜品 id",
@@ -227,233 +177,29 @@
       "system_only": false
     },
     {
-      "name": "login_apply",
-      "desc": "发送短信验证码 → /api/v3/account/mobileloginapply（passport.meituan.com，待真机验证参数）。可能需先过滑块/图形验证",
+      "name": "generate_order_link",
+      "desc": "路径 B：生成美团 App 订单/点餐 scheme → 壳原生拉起美团 App 进该店点餐页。客户在 App 内自行登录、下单、支付。系统不持有登录态、不代付。",
       "need_login": false,
       "params": {
-        "mobile": "手机号",
-        "captcha": "图形/滑块验证结果（若有，待验证）"
-      },
-      "keywords": [
-        "发验证码",
-        "登录(手机验证码)"
-      ],
-      "success_ret": "",
-      "error_ret": "",
-      "system_only": false
-    },
-    {
-      "name": "login",
-      "desc": "手机号+验证码登录 → /api/v3/account/mobilelogin（passport.meituan.com，待真机验证参数）→ token 存手机凭据库",
-      "need_login": false,
-      "params": {
-        "mobile": "手机号",
-        "verify_code": "短信验证码",
-        "ticket": "apply 返回的票据（待验证）"
-      },
-      "keywords": [
-        "登录",
-        "验证码登录"
-      ],
-      "success_ret": "登录成功",
-      "error_ret": "",
-      "system_only": false
-    },
-    {
-      "name": "sync_cart",
-      "desc": "同步购物车/加购 → /weapp/v1/multiplecart/syncfood（待真机验证参数）。body 含 poi_id + foods[{product_id, count}]",
-      "need_login": true,
-      "params": {
-        "poi_id": "店铺 id",
-        "foods": "[{product_id, count, ...}] 待真机验证结构",
-        "city_id": "城市 id（待验证）"
-      },
-      "keywords": [
-        "加购物车",
-        "点这个菜",
-        "加一份"
-      ],
-      "requires": [
-        {
-          "param": "poi_id",
-          "from": "search_poi",
-          "field": "poi_id",
-          "note": "先 search_poi 拿真实 poi_id"
-        }
-      ],
-      "success_ret": "",
-      "error_ret": "",
-      "system_only": false
-    },
-    {
-      "name": "get_cart_info",
-      "desc": "购物车信息 → /weapp/v1/multiplecart/allcartinfo（待真机验证参数）→ 购物车菜品/金额",
-      "need_login": true,
-      "params": {},
-      "keywords": [
-        "我的购物车",
-        "购物车"
-      ],
-      "success_ret": "",
-      "error_ret": "",
-      "system_only": false
-    },
-    {
-      "name": "get_address_list",
-      "desc": "收货地址列表 → /user/address/getaddr（待真机验证参数）→ [{address_id, detail, ...}]",
-      "need_login": true,
-      "params": {},
-      "keywords": [
-        "我的地址",
-        "收货地址"
-      ],
-      "provides": {
-        "address_id": {
-          "desc": "地址 id，供 preview_order/submit_order 使用",
-          "used_by": ["preview_order", "submit_order"]
-        }
-      },
-      "success_ret": "",
-      "error_ret": "",
-      "system_only": false
-    },
-    {
-      "name": "preview_order",
-      "desc": "结算预览 → /order/preview/container（待真机验证参数）。返回配送费/优惠/预计送达等，下单前置",
-      "need_login": true,
-      "params": {
-        "poi_id": "店铺 id（待验证）",
-        "address_id": "地址 id（待验证）"
-      },
-      "keywords": [
-        "去结算",
-        "结算",
-        "确认订单"
-      ],
-      "requires": [
-        {
-          "param": "poi_id",
-          "from": "search_poi",
-          "field": "poi_id",
-          "note": "先 search_poi 拿真实 poi_id"
-        },
-        {
-          "param": "address_id",
-          "from": "get_address_list",
-          "field": "address_id",
-          "note": "先 get_address_list 拿真实地址 id"
-        }
-      ],
-      "success_ret": "",
-      "error_ret": "",
-      "system_only": false
-    },
-    {
-      "name": "submit_order",
-      "desc": "提交订单 ⚠️真操作有副作用，须用户确认 → /order/submit（待真机验证完整请求体）。提交前先 preview_order 拿结算数据",
-      "need_login": true,
-      "params": {
-        "poi_id": "店铺 id",
-        "address_id": "地址 id",
-        "preview_data": "preview_order 返回的结算数据（待验证结构）"
+        "poi_id": "店铺 id（先 search_poi / homepage 拿真实 id，禁止编造）"
       },
       "keywords": [
         "下单",
-        "提交订单",
         "点这个",
-        "帮我点一份"
+        "帮我点一份",
+        "订单链接",
+        "拉起美团",
+        "去美团点"
       ],
       "requires": [
         {
           "param": "poi_id",
           "from": "search_poi",
           "field": "poi_id",
-          "match": { "poi_name": "poi_name" },
-          "note": "先用店铺名在 search_poi 结果精确匹配，取真实 poi_id"
-        },
-        {
-          "param": "address_id",
-          "from": "get_address_list",
-          "field": "address_id",
-          "note": "先 get_address_list 拿地址 id"
-        },
-        {
-          "param": "preview_data",
-          "from": "preview_order",
-          "field": "data",
-          "note": "先 preview_order 拿结算容器数据，提交时回填"
+          "note": "先用店铺名在 search_poi/homepage 结果精确匹配，取真实 poi_id"
         }
       ],
-      "success_ret": "订单创建结果（含订单号/支付信息）",
-      "error_ret": "",
-      "system_only": false
-    },
-    {
-      "name": "get_orders",
-      "desc": "订单列表 → /order/getuserorders（待真机验证参数）→ [{order_id, status, amount, ...}]",
-      "need_login": true,
-      "params": {
-        "page": "0",
-        "size": "10"
-      },
-      "keywords": [
-        "我的订单",
-        "订单列表",
-        "查订单"
-      ],
-      "provides": {
-        "order_id": {
-          "desc": "订单 id，供 get_order_detail/cancel_order 使用",
-          "used_by": ["get_order_detail", "cancel_order"]
-        }
-      },
-      "success_ret": "",
-      "error_ret": "",
-      "system_only": false
-    },
-    {
-      "name": "get_order_detail",
-      "desc": "订单详情 → /order/detail（待真机验证参数）→ 订单状态/菜品/金额",
-      "need_login": true,
-      "params": {
-        "order_id": "订单 id"
-      },
-      "keywords": [
-        "订单详情",
-        "这个订单怎么样了"
-      ],
-      "requires": [
-        {
-          "param": "order_id",
-          "from": "get_orders",
-          "field": "order_id",
-          "note": "先 get_orders 拿订单 id"
-        }
-      ],
-      "success_ret": "",
-      "error_ret": "",
-      "system_only": false
-    },
-    {
-      "name": "cancel_order",
-      "desc": "取消订单 ⚠️有副作用 → /order/cancel（待真机验证参数）",
-      "need_login": true,
-      "params": {
-        "order_id": "订单 id"
-      },
-      "keywords": [
-        "取消订单",
-        "退单"
-      ],
-      "requires": [
-        {
-          "param": "order_id",
-          "from": "get_orders",
-          "field": "order_id",
-          "note": "先 get_orders 拿订单 id"
-        }
-      ],
-      "success_ret": "",
+      "success_ret": "{\"ok\": true, \"scheme\": \"imeituan://www.meituan.com/takeout/food?poi_id=...\", \"package\": \"com.sankuai.meituan\"}",
       "error_ret": "",
       "system_only": false
     }

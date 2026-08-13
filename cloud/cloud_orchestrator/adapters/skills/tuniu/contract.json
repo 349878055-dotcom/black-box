@@ -2,7 +2,7 @@
   "id": "tuniu",
   "name": "途牛（查：MCP 查询；买：M 站下单+支付）",
   "capability": "operate",
-  "capability_note": "查票（MCP 免登录）；下单（M 站，需登录 cookie，乘客直传 touristList；下单前需先 train_booking_info 查车次编码、resolve_city_code 查城市码）；支付在手机支付宝/途牛 App 完成（需真人确认）",
+  "capability_note": "路径 A：MCP 查票免登录；M 站代下单（cookie，滑块真人；下单前先 train_booking_info / resolve_city_code）；下完单再 alipays:// 去付钱。这是 A，不是 B。",
   "flow": [
     {
       "step": 1,

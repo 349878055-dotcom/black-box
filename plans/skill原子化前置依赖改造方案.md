@@ -1,12 +1,12 @@
 # Skill 原子化 + 前置依赖 改造方案
 
-> 目标：三个 skill（glyy / tuniu / njpkzyy_new）统一为「原子化方法 + 前置依赖声明」，删除所有聚合/连串动作方法（一键挂号、内部自动连串），根治 LLM 编排不稳定问题。
+> 目标：三个 skill（glyy / tuniu / njpkzyy）统一为「原子化方法 + 前置依赖声明」，删除所有聚合/连串动作方法（一键挂号、内部自动连串），根治 LLM 编排不稳定问题。
 
 ## ✅ 实施状态（2026-08-08 已完成）
 
 | 步骤 | 文件 | 状态 |
 |---|---|---|
-| njpkzyy_new 补 provides/requires | `adapters/skills/njpkzyy_new/contract.json` | ✅ 已实施 |
+| njpkzyy 补 provides/requires | `adapters/skills/njpkzyy/contract.json` | ✅ 已实施 |
 | glyy 契约对齐 + 补标注 + 删 book | `adapters/skills/glyy/contract.json`、`api/visit.py`、`api/_base.py` | ✅ 已实施 |
 | tuniu 拆 submit_order + 新增 train_booking_info | `adapters/skills/tuniu/api/order.py`、`api/api.py`、`contract.json` | ✅ 已实施 |
 | 检索层展示 requires/provides | `retrieval/index.py` | ✅ 已实施 |
@@ -14,7 +14,7 @@
 
 验证结果：
 - 三个 contract.json 均合法；所有契约参数与 api.py 实现签名一致（校验脚本通过）。
-- `_fill_requires` 递归补齐测试通过：njpkzyy_new 挂号链（dept_code→doctor/schedule→patient）、glyy patient 对象传递、tuniu submit_order（booking + 城市码）。
+- `_fill_requires` 递归补齐测试通过：njpkzyy 挂号链（dept_code→doctor/schedule→patient）、glyy patient 对象传递、tuniu submit_order（booking + 城市码）。
 - 全部改动文件 py_compile 通过。
 
 ## ⚠️ 缺陷修复记录（推演发现 + 已修）
@@ -170,7 +170,7 @@
 
 ---
 
-## 五、njpkzyy_new（浦口中医院）补标注方案
+## 五、njpkzyy（浦口中医院）补标注方案
 
 无内部聚合方法，只需补 `provides` / `requires` 标注：
 
@@ -216,7 +216,7 @@
 
 ## 七、分步实施顺序（按风险从低到高）
 
-1. **njpkzyy_new 补标注**（纯 contract.json 改动，最低风险）→ 触发索引重建 → 验证。
+1. **njpkzyy 补标注**（纯 contract.json 改动，最低风险）→ 触发索引重建 → 验证。
 2. **glyy 契约与实现对齐 + 删 book + 补标注** → 验证。
 3. **tuniu 拆 submit_order + 新增 train_booking_info + 补标注** → 验证。
 4. **检索层 index.py 展示 provides/requires** → 让 LLM 看得见依赖。
@@ -235,7 +235,7 @@
 
 ---
 
-## 附：统一契约示例（njpkzyy_new）
+## 附：统一契约示例（njpkzyy）
 
 ```jsonc
 {
