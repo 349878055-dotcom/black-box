@@ -1,5 +1,6 @@
 package com.xiami.host;
 
+import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 
 import android.app.Activity;
@@ -488,6 +489,7 @@ public class MainActivity extends Activity {
         browserWeb.loadUrl("file:///android_asset/browser_home.html");
     }
 
+    @SuppressWarnings("deprecation")
     private WebView makeUiWeb() {
         // 调试机：开启 WebView 远程调试（chrome://inspect / CDP 注入辅助），上线可移除
         WebView.setWebContentsDebuggingEnabled(true);
@@ -496,6 +498,9 @@ public class MainActivity extends Activity {
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
         s.setAllowFileAccess(true);
+        // 展示厅用 srcdoc 注入；这两项给 file:// 兜底读取 assets
+        s.setAllowFileAccessFromFileURLs(true);
+        s.setAllowUniversalAccessFromFileURLs(true);
         w.setFocusable(true);
         w.setFocusableInTouchMode(true);
         // 点输入框强制弹键盘（不依赖 JS onfocus 时机，兼容部分 ROM WebView 不弹键盘）
@@ -1006,6 +1011,22 @@ public class MainActivity extends Activity {
 
     // ═══════════ JS Bridge（UI → 原生）═══════════
     class JsBridge {
+        /** 读 assets 文本（展示厅页面）。只允许相对路径，禁止 .. */
+        @JavascriptInterface
+        public String readAsset(String path) {
+            if (path == null || path.isEmpty() || path.contains("..") || path.startsWith("/")) return "";
+            try (InputStream in = getAssets().open(path);
+                 ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+                byte[] buf = new byte[4096];
+                int n;
+                while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                return out.toString("UTF-8");
+            } catch (Exception e) {
+                Log.w(TAG, "readAsset " + path, e);
+                return "";
+            }
+        }
+
         /** 第 6 条：执行 skill 请求蓝图（手机直连平台）→ 回调 ui.html __skillResult 回传 skill_result。
          *  App 内置固定引擎（红线 A：只执行 JSON 配置，绝不下发/执行代码）。 */
         @JavascriptInterface

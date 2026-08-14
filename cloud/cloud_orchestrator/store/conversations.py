@@ -16,6 +16,16 @@ from .persist import load_json, save_json
 
 _FILE = "conversations.json"
 
+_PERSONA_KEYS = {"person_id", "person_name", "skills"}
+
+
+def _clean_persona(raw: Any) -> dict:
+    """persona 只收「引用上台卡」的三样字段（person_id/person_name/skills），
+    其余一律丢弃——不复制整张卡，更不把证件等资料带进会话。"""
+    if not isinstance(raw, dict):
+        return {}
+    return {k: v for k, v in raw.items() if k in _PERSONA_KEYS}
+
 
 @dataclass
 class Conversation:
@@ -23,7 +33,7 @@ class Conversation:
     user_id: str
     title: str = "新对话"
     type: str = "chat"              # chat / skill
-    persona: dict[str, Any] = field(default_factory=dict)  # 会话级人设 {nickname,prompt,bio}
+    persona: dict[str, Any] = field(default_factory=dict)  # 会话人设 = 引用上台卡 {person_id, person_name, skills[]}（只挂 id）
     messages: list[dict[str, Any]] = field(default_factory=list)  # [{who,text,img,at}]
     pinned: bool = False
     deleted: bool = False           # 软删标记（当前流程硬删，保留字段备用）
@@ -81,14 +91,14 @@ class ConversationStore:
         return conv
 
     def create(self, user_id: str, type: str = "chat", persona: dict | None = None) -> Conversation:
-        """新建会话，返回会话对象。"""
+        """新建会话，返回会话对象。persona 只保留引用上台卡的字段。"""
         now = time.time()
         conv = Conversation(
             conversation_id=uuid.uuid4().hex,
             user_id=user_id,
             title="新对话",
             type=type or "chat",
-            persona=dict(persona or {}),
+            persona=_clean_persona(persona),
             messages=[],
             created_at=now,
             updated_at=now,

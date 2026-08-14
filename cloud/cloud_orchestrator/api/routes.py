@@ -2,7 +2,8 @@
 API 路由（个人助理5 · skill 消费版）。
 
 HTTP: /health /api/v1/auth/login|register /api/v1/chat /api/v1/task /api/v1/cancel
-      /api/v1/me (GET/PUT 个人资料中心)
+      /api/v1/me (GET/PUT 客户资料区)
+      /api/v1/cards (GET 才艺分区，上台卡)
 WebSocket: /api/v1/ws（App 执行通道 + ask_user 交互）
 """
 from __future__ import annotations
@@ -10,7 +11,7 @@ from __future__ import annotations
 import time
 
 from fastapi import APIRouter, HTTPException, Request, WebSocket
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..auth import create_tokens, refresh_access, revoke_refresh
 from ..channel.ws import handle_websocket
@@ -44,7 +45,6 @@ class MeUpdate(BaseModel):
     nickname: str = ""
     bio: str = ""
     avatar: str = ""
-    profile: dict = {}
 
 
 def _my_email(request: Request) -> str:
@@ -160,9 +160,38 @@ async def cancel_task(request: Request):
 
 # ═══════════════════ 会话管理（豆包式单用户多会话）═══════════════════
 
+class PersonaRef(BaseModel):
+    """会话人设 = 引用上台卡（只挂 id，不复制卡/证件）。
+    只收 person_id / person_name / skills[] 三样；skills 里的元素 = 上台卡挂的 skill id（如 glyy）。"""
+    person_id: str = ""
+    person_name: str = ""
+    skills: list[str] = []
+
+
 class ConvCreate(BaseModel):
     type: str = "chat"        # chat / skill
-    persona: dict = {}
+    persona: PersonaRef = Field(default_factory=PersonaRef)
+
+
+def _validate_persona(p: PersonaRef) -> dict:
+    """persona 只收引用上台卡：person_id 必须在 cards.json 存在且 status=on 才允许落库。
+    落库结构固定 {person_id, person_name, skills[]}，不复制整张卡、更不碰证件。"""
+    if not p:
+        return {}
+    pid = (p.person_id or "").strip()
+    if not pid:
+        return {}
+    from ..store.cards import cards
+
+    card = cards.get(pid)
+    if not card or card.get("status") != "on":
+        raise HTTPException(status_code=404, detail=f"上台卡不存在或未上场：{pid}")
+    return {
+        "person_id": pid,
+        "person_name": (p.person_name or "").strip() or (card.get("name") or ""),
+        "skills": [s["id"] for s in (card.get("skills") or [])
+                   if isinstance(s, dict) and s.get("id")],
+    }
 
 
 class ConvUpdate(BaseModel):
@@ -208,7 +237,8 @@ async def create_conversation(request: Request, body: ConvCreate):
     from ..store.conversations import conversations
 
     _, user_id = _me_ids(request)
-    conv = conversations.create(user_id, type=body.type or "chat", persona=body.persona or {})
+    persona = _validate_persona(body.persona)
+    conv = conversations.create(user_id, type=body.type or "chat", persona=persona)
     return {"ok": True, "conversation": conv.to_dict()}
 
 
@@ -250,7 +280,26 @@ async def delete_conversation(request: Request, conv_id: str):
     return {"ok": True}
 
 
-# ═══════════════════ 个人资料中心 ═══════════════════
+# ═══════════════════ 才艺分区（上台卡；与客户资料区隔离）═══════════════════
+
+@router.get("/api/v1/cards")
+async def api_list_cards(q: str = "", cat: str = "", sort: str = "score"):
+    from ..store.cards import cards
+
+    return {"ok": True, "cards": cards.list(q=q, cat=cat, sort=sort)}
+
+
+@router.get("/api/v1/cards/{card_id}")
+async def api_get_card(card_id: str):
+    from ..store.cards import cards
+
+    card = cards.get(card_id)
+    if not card or card.get("status") != "on":
+        raise HTTPException(status_code=404, detail="这张上台卡不在场")
+    return {"ok": True, "card": card}
+
+
+# ═══════════════════ 客户资料区 ═══════════════════
 
 @router.get("/api/v1/me")
 async def me(request: Request):
@@ -260,7 +309,7 @@ async def me(request: Request):
     if not email:
         raise HTTPException(status_code=401, detail="未登录")
     u = users.touch(email)
-    return {"ok": True, "user": _user_view(u), "profile": dict(u.profile or {})}
+    return {"ok": True, "user": _user_view(u)}
 
 
 @router.put("/api/v1/me")
@@ -273,7 +322,6 @@ async def update_me(request: Request, body: MeUpdate):
         nickname=body.nickname,
         bio=body.bio,
         avatar=body.avatar,
-        profile=body.profile,
     )
     if not u:
         raise HTTPException(status_code=404, detail="用户不存在")

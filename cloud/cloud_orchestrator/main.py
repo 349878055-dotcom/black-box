@@ -21,7 +21,7 @@ logging.basicConfig(
     force=True,
 )
 
-app = FastAPI(title="个人助理5 · API 优先云端", version="1.0.0")
+app = FastAPI(title="个人助理5 · API 优先云端", version="0.1.0")
 
 # 认证中间件放内层，CORS 放最外层（后加的 add_middleware 在最外层）：
 # 否则 auth 中间件对 401/403 直接短路返回，不带 CORS 头 → App 的 file:// 页面（origin=null）

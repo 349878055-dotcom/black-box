@@ -165,19 +165,30 @@
   .msg.user { background: var(--accent-grad); color: #fff; padding: 10px 14px; border-radius: 16px; border-bottom-right-radius: 6px; max-width: 80%; margin-left: auto; white-space: pre-wrap; box-shadow: 0 2px 8px var(--accent-shadow); }
   .msg.bot { background: transparent; color: var(--text); max-width: 100%; }
   .msg.sys { background: var(--sys-bg); color: var(--sys-fg); font-size: 15px; text-align: center; max-width: 100%; border-radius: 12px; padding: 8px 12px; margin-bottom: 12px; }
-  .chat-welcome { text-align: center; color: var(--muted); padding: 56px 0 32px; }
+  .chat-welcome { text-align: center; color: var(--muted); padding: 22vh 28px 40px; }
   .db-title .title, .lv-title, .chat-welcome h2, .me-name, .modal h2, .box h3 {
     font-family: var(--font-display);
   }
   .chat-welcome .welcome-avatar {
-    width: 76px; height: 76px; margin: 0 auto 18px; border-radius: var(--avatar-radius);
-    background: var(--accent-grad); color: #fff; font-size: 38px;
+    width: 64px; height: 64px; margin: 0 auto 28px; border-radius: var(--avatar-radius);
+    background: var(--accent-grad); color: #fff; font-size: 32px;
     display: flex; align-items: center; justify-content: center;
-    box-shadow: 0 12px 28px var(--accent-shadow);
+    box-shadow: 0 10px 24px var(--accent-shadow);
   }
-  .chat-welcome h2 { font-size: 22px; color: var(--text2); margin-bottom: 10px; font-weight: 800; }
+  .chat-welcome h2 {
+    font-size: 26px; color: var(--text2); margin: 0; font-weight: 650;
+    letter-spacing: .18em; line-height: 1.35;
+  }
   .chat-welcome h2 b { color: var(--accent); font-weight: 800; }
-  .chat-welcome p { font-size: 13px; line-height: 1.7; }
+  .chat-welcome .welcome-sub {
+    display: inline-flex; align-items: center; gap: 8px;
+    margin-top: 22px; padding: 8px 16px 8px 12px;
+    border-radius: 999px; font-size: 14px; line-height: 1;
+    letter-spacing: .06em; color: var(--muted2);
+    background: var(--hover); border: 1px solid var(--line);
+    cursor: pointer;
+  }
+  .chat-welcome .welcome-spark { font-size: 15px; line-height: 1; transform: translateY(-0.5px); }
   .chat-inputbar {
     padding: 10px 14px 14px;
     background: var(--bg2);
@@ -369,7 +380,7 @@
   <div class="main">
     <div class="topbar">
       <button class="menu-btn" onclick="showView('list')" title="对话列表">☰</button>
-      <button class="menu-btn" onclick="showBrowserBtn()" title="打开内置浏览器">🌐</button>
+      <button class="menu-btn" onclick="showView('showcase')" title="才艺">✨</button>
       <button class="menu-btn" id="backBtn" onclick="showView('chat')" style="display:none" title="返回对话">←</button>
       <div class="db-title">
         <div class="title" id="viewTitle">虾米</div>
@@ -398,7 +409,7 @@
     <div class="view active" id="chatView">
       <div class="chat-scroll" id="chatScroll">
         <div class="chat-inner" id="chatInner">
-          <div class="chat-welcome" id="chatWelcome"><div class="welcome-avatar" id="welcomeBot">🤖</div><h2>你好，我是 <b>虾米</b></h2><p>你的生活助手：订票/订酒店/挂号/查信息，都能帮你办。<br>直接告诉我你想办什么就行。</p></div>
+          <div class="chat-welcome" id="chatWelcome"><div class="welcome-avatar" id="welcomeBot">🤖</div><h2>家里有人</h2><div class="welcome-sub" onclick="showView('showcase')"><span class="welcome-spark">✨</span>去才艺，看家里谁会</div></div>
         </div>
       </div>
       <div class="chat-inputbar">
@@ -440,9 +451,9 @@
         <!-- 关于 -->
         <div class="box">
           <h3>关于</h3>
-          <div class="set-row" onclick="alert('虾米 · 云端大脑 + 手机执行\n版本 1.0')">
+          <div class="set-row" onclick="alert('虾米 · 云端大脑 + 手机执行\n版本 0.1.0')">
             <span class="set-ic" id="icSetAbout">ℹ️</span>
-            <div class="set-txt"><div class="set-label">版本</div><div class="set-sub">虾米 1.0 · 云端大脑 + 手机执行</div></div>
+            <div class="set-txt"><div class="set-label">版本</div><div class="set-sub">虾米 0.1.0 · 云端大脑 + 手机执行</div></div>
             <span class="set-arrow">›</span>
           </div>
         </div>
@@ -452,6 +463,11 @@
 
     <!-- 我的 -->
     <div class="view" id="meView"><div class="panel" id="meBox"></div></div>
+
+    <!-- 才艺（才艺分区：看家人；对话绑的是上台卡） -->
+    <div class="view" id="showcaseView">
+      <iframe id="showcaseFrame" title="才艺" style="flex:1;border:0;width:100%;height:100%;min-height:0;background:#0b0d12"></iframe>
+    </div>
   </div>
 </div>
 
@@ -587,13 +603,13 @@ function getBase() {
 }
 
 // ═══ 视图切换 ═══
-const TITLES = { list:'对话列表', chat:'虾米', me:'我的', settings:'设置' };
-const VIEWS = { list:'listView', chat:'chatView', me:'meView', settings:'settingsView' };
+const TITLES = { list:'对话列表', chat:'虾米', me:'我的', settings:'设置', showcase:'才艺' };
+const VIEWS = { list:'listView', chat:'chatView', me:'meView', settings:'settingsView', showcase:'showcaseView' };
 function showView(name) {
   S.view = name;
   Object.keys(VIEWS).forEach(v => $(VIEWS[v]).classList.toggle('active', v === name));
   Object.keys(VIEWS).forEach(v => { const el = $('mi-' + v); if (el) el.classList.toggle('active', v === name); });
-  // 聊天/对话列表各自有返回入口，顶栏返回只在「我的/设置」显示
+  // 聊天/对话列表各自有返回入口，顶栏返回只在「我的/设置/才艺」显示
   $('backBtn').style.display = (name === 'chat' || name === 'list') ? 'none' : 'block';
   const sub = $('viewSub');
   if (name === 'chat') {
@@ -609,8 +625,67 @@ function showView(name) {
     if (sub) sub.style.display = 'none';
     if (name === 'me') loadMe();
     if (name === 'settings') renderSettings();
+    if (name === 'showcase') loadShowcaseFrame();
   }
 }
+
+/** Android WebView 拦 file:// iframe，改为原生读 assets 再 srcdoc 注入 */
+function loadShowcaseFrame() {
+  const f = $('showcaseFrame');
+  if (!f) return;
+  const sendConfig = function () {
+    try {
+      f.contentWindow.postMessage({ type:'showcase:config', base: (S.base || getBase()) }, '*');
+    } catch (e) {}
+  };
+  if (f.dataset.loaded === '1') { sendConfig(); return; }
+  f.onload = sendConfig;
+  try {
+    if (window.AndroidBridge && window.AndroidBridge.readAsset) {
+      const html = window.AndroidBridge.readAsset('showcase/index.html');
+      if (html) {
+        f.srcdoc = html;
+        f.dataset.loaded = '1';
+        return;
+      }
+    }
+  } catch (e) {}
+  f.src = 'file:///android_asset/showcase/index.html';
+  f.dataset.loaded = '1';
+}
+
+/** 才艺里选定人 → 这场对话跟 TA 聊（persona 写入会话） */
+async function startPersonChatFromShowcase(payload) {
+  if (!payload || !payload.personId) return;
+  if (!S.token) { openConn(); appendMsg('sys', '请先登录，再跟家人说话'); return; }
+  loadSessions();
+  const persona = {
+    person_id: payload.personId,
+    person_name: payload.personName || payload.personId,
+    tagline: payload.tagline || '',
+    skills: payload.skills || [],
+    source: 'showcase',
+  };
+  let id = 'sess_' + Date.now();
+  let name = payload.personName || '新对话';
+  try {
+    const r = await api('/api/v1/conversations', { method:'POST', body: JSON.stringify({ type:'chat', persona }) });
+    const c = r.conversation || {};
+    if (c.conversation_id) { id = c.conversation_id; name = c.title || name; }
+  } catch (e) {}
+  S.sessions[id] = { id, type:'chat', name, persona, messages:[], pinned:false, lastAt:Date.now(), _synced:true };
+  S.activeSessId = id;
+  saveSessions();
+  appendMsg('bot', '这场对话是在跟 **' + esc(persona.person_name) + '** 聊。家里这位的才艺只在这里生效。你直接说就行。');
+  renderConvList();
+  showView('chat');
+}
+
+window.addEventListener('message', (e) => {
+  const d = e && e.data;
+  if (!d || d.type !== 'showcase:hire') return;
+  startPersonChatFromShowcase(d);
+});
 function renderSettings() {
   const logout = $('setLogout');
   if (logout) logout.style.display = S.token ? 'block' : 'none';
@@ -845,7 +920,7 @@ const THEMES = {
     name:'石墨工业', tag:'利落直角 · 等宽感', group:'dark',
     swatch:'linear-gradient(135deg,#27272a,#a1a1aa)', btn:'square', wall:'mesh_d', wallSize:'22px 22px, 22px 22px, auto',
     font:'mono', avatar:'6px', letter:'.4px',
-    icons:{ bot:'⚙️', attach:'📁', me:'🧑‍💻', settings:'🛠️', chat:'⌨️', skill:'🔩', about:'ℹ️', out:'↩', new:'＋' },
+    icons:{ bot:'⚙️', attach:'📁', me:'👤', settings:'🛠️', chat:'⌨️', skill:'🔩', about:'ℹ️', out:'↩', new:'＋' },
     vars:{
       '--bg':'#18181b','--bg2':'#27272a','--text':'#e4e4e7','--text2':'#fafafa','--muted':'#a1a1aa','--muted2':'#d4d4d8',
       '--line':'#3f3f46','--line2':'#52525b','--line3':'#2e2e33','--accent':'#a1a1aa','--accent2':'#d4d4d8',
@@ -929,7 +1004,7 @@ function skinIcon(key) { return (curSkin().icons || {})[key] || ''; }
 
 function welcomeHtml() {
   const bot = skinIcon('bot') || '🦐';
-  return '<div class="chat-welcome"><div class="welcome-avatar" id="welcomeBot">' + bot + '</div><h2>你好，我是 <b>虾米</b></h2><p>你的生活助手：订票 / 订酒店 / 挂号 / 查信息，都能帮你办。<br>直接告诉我你想办什么就行。</p></div>';
+  return '<div class="chat-welcome"><div class="welcome-avatar" id="welcomeBot">' + bot + '</div><h2>家里有人</h2><div class="welcome-sub" onclick="showView(\'showcase\')"><span class="welcome-spark">✨</span>去才艺，看家里谁会</div></div>';
 }
 
 function loadThemeFont(fontKey) {
@@ -1547,7 +1622,7 @@ function md(raw) {
   if (tbl) html += '</table>';
   return html;
 }
-// 🌐 浏览器入口：切到内置浏览器视图（顶部栏 ☰ 旁 🌐 按钮 + 登录/验证码提示时调用）。
+// 🌐 浏览器入口：授权中心「内置浏览器」+ 登录/验证码提示时调用。
 // 原生 AndroidBridge.showBrowserCurrent() 切到浏览器（不重载当前页）；
 // 兼容无原生 bridge 的预览环境。
 function showBrowserBtn() {
@@ -1588,7 +1663,6 @@ async function doLogin(isRegister) {
     $('connModal').classList.remove('show');
     setConn('设备在线');
     showBrowserBtn();
-    appendMsg('bot', '登录成功，我是虾米 🤖 你的生活助手。\n直接问我（订票/订酒店/挂号/查信息）就行。');
     loadMe(); startTaskPoll(); connectWS(); syncConversations();
     showView('chat');   // 登录后进入会话列表首页
     $('connMsg').textContent = '';
@@ -1845,7 +1919,7 @@ async function handleCmd(msg) {
     S.waitingAsk = true;
     // 与 refreshTask 共用 askGate：标记已渲染，避免轮询再插一条重复提问
     S.askGate = JSON.stringify({ question: String(params.question||'') });
-    // 需要看页面/验证码时：提示用顶部 🌐 切浏览器、← 回聊天回复
+    // 需要看页面/验证码时：切到内置浏览器、← 回聊天回复
     const q = String(params.question||'请配合（登录/验证码）');
     const needLook = /验证码|图片|截图|看.*页|在屏幕上|人工/i.test(q);
     const img = params.image || null;
@@ -1977,7 +2051,8 @@ async function loadMe() {
       ${profileBoxHtml()}
       ${authBoxHtml()}
       <div class="box"><h3>我的才艺（${mine.length}）</h3>
-        ${mine.length ? mine.map(s=>`<div style="padding:5px 0">${esc(s.name)} ${skillBadge(s)}</div>`).join('') : '<div class="muted">暂无已接入的才艺</div>'}
+        <div class="muted" style="margin:2px 0 8px">家人在这里管理上场。大厅在顶栏 ✨</div>
+        ${mine.length ? mine.map(s=>`<div style="padding:5px 0">${esc(s.name)} ${skillBadge(s)}</div>`).join('') : '<div class="muted">还没有挂上才艺</div>'}
       </div>`;
     loadAuth();
   } catch (e) { $('meBox').innerHTML = '<div class="empty"><b>加载失败</b>' + esc(e.message) + '</div>'; }
@@ -1988,6 +2063,14 @@ const AUTH_NAMES = { glyy:'南京鼓楼医院', tuniu:'途牛旅游' };
 const AUTH_SHORT = { glyy:'鼓楼医院', tuniu:'途牛' };
 function authBoxHtml() {
   return `<div class="box"><h3>🔐 授权中心 <span class="muted" style="font-weight:400">（已登录平台，才艺调用自动使用）</span></h3>
+    <div class="set-row" onclick="showBrowserBtn()">
+      <span class="set-ic">🌐</span>
+      <div class="set-txt">
+        <div class="set-label">内置浏览器</div>
+        <div class="set-sub">登录医院、出行等平台时用这里打开</div>
+      </div>
+      <span class="set-arrow">›</span>
+    </div>
     <div id="authBox"><div class="muted">加载中…</div></div></div>`;
 }
 function loadAuth() {
@@ -2013,7 +2096,7 @@ function loadAuth() {
 }
 function gotoAuth(skill) {
   const name = AUTH_NAMES[skill] || skill;
-  appendMsg('bot', '要授权 ' + name + '，请直接对我说「登录' + (AUTH_SHORT[skill]||skill) + '」，我会引导你完成登录并保存授权。');
+  appendMsg('bot', '要授权 ' + name + '，请直接对我说「登录' + (AUTH_SHORT[skill]||skill) + '」，我会引导你完成登录并保存授权。\n也可在「我的 → 授权中心 → 内置浏览器」手动打开登录页。');
   showView('chat');
 }
 function clearAuth(skill) {

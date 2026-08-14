@@ -12,6 +12,13 @@
 - **禁止** 聊天里粘贴 `data:image/...`、PNG/JPG/WebP 给 DeepSeek
 - 网页自动化交给 `browse_web`（千问视觉），Zoo 不截图
 
+**收到截图必须立即明确回应（禁止卡死 / 长时无响应）**：
+- 用户一旦在聊天里贴图/截图（`data:image/...`、PNG/JPG/WebP，或说"看这张图/截图"），
+  **必须立刻回复下面这段，不要等待、不要重试、不要假装能看图**：
+  > 当前 DeepSeek 是纯文本模型，不支持图片输入，这张图我看不了。
+  > ① 请用文字描述图里的内容；② 看手机/网页画面走 uiautomator dump（XML 文本）或 browse_web（千问视觉）；③ 图片可存到 /tmp 由你本地查看。
+- 说完即结束本轮；若用户仍坚持发图，重复一句"DeepSeek 不支持图片"即可，**绝不挂起等待**。
+
 看手机界面唯一方式（uiautomator dump + XML 文本）：
 ```bash
 ADB=/home/jintao/Android/platform-tools/adb; DEV=D5F7N18C07007849

@@ -106,6 +106,12 @@ async def auth_middleware(request: Request, call_next):
     ]
     if request.url.path in public_paths:
         return await call_next(request)
+    # 才艺分区只读：未登录也能逛上台卡
+    if request.method == "GET" and (
+        request.url.path == "/api/v1/cards"
+        or request.url.path.startswith("/api/v1/cards/")
+    ):
+        return await call_next(request)
 
     # 静态资源（测试壳子 phone_test_shell.html 等）无需认证
     if request.url.path.startswith("/static"):

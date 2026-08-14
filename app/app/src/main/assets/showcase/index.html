@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>才艺</title>
+  <style>
+    :root {
+      --ink: #e8eaed;
+      --muted: #8b93a7;
+      --faint: #6a7388;
+      --blue: #6b8cff;
+      --gold: #e7c57a;
+      --ok: #3ecf8e;
+      --line: rgba(255,255,255,.08);
+      --card: rgba(22,26,36,.86);
+      --font: "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+      --display: "Songti SC", "Noto Serif SC", "STSong", serif;
+      --safe-b: env(safe-area-inset-bottom, 0px);
+      --safe-t: env(safe-area-inset-top, 0px);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+    body {
+      font-family: var(--font);
+      color: var(--ink);
+      background: #07080c;
+      -webkit-tap-highlight-color: transparent;
+    }
+    button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+    input, textarea { font: inherit; color: inherit; }
+    .page { display: none; flex: 1; min-height: 0; flex-direction: column; }
+    .page.is-on { display: flex; }
+
+    .stage {
+      min-height: 100%;
+      display: grid;
+      place-items: center;
+      background: radial-gradient(900px 420px at 20% -8%, rgba(107,140,255,.16), transparent 55%), #07080c;
+    }
+    .phone {
+      width: 100%;
+      max-width: 430px;
+      height: 100dvh;
+      position: relative;
+      overflow: hidden;
+      background:
+        radial-gradient(800px 380px at 18% -10%, rgba(107,140,255,.22), transparent 55%),
+        radial-gradient(620px 320px at 92% 10%, rgba(130,100,255,.12), transparent 50%),
+        linear-gradient(165deg, #10131b 0%, #0b0d12 55%, #0a0c11 100%);
+    }
+    .screen { height: 100%; display: flex; flex-direction: column; }
+
+    .top { padding: calc(12px + var(--safe-t)) 20px 4px; }
+    .brand {
+      display: flex; align-items: center; gap: 8px;
+      font-size: 12px; font-weight: 700; letter-spacing: .14em;
+      text-transform: uppercase; color: #a8b4ff;
+    }
+    .brand-dot {
+      width: 9px; height: 9px; border-radius: 50%;
+      background: linear-gradient(145deg, #9eb0ff, #4f6ef5);
+      box-shadow: 0 0 12px rgba(107,140,255,.55);
+    }
+    h1 { font-family: var(--display); font-size: 28px; font-weight: 650; margin: 10px 0 6px; }
+    .lead { font-size: 13px; color: var(--muted); line-height: 1.6; }
+
+    .search, .field {
+      display: flex; align-items: center; gap: 8px;
+      background: rgba(255,255,255,.05);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 10px 12px;
+    }
+    .search { margin: 12px 20px 8px; }
+    .search input, .field textarea {
+      flex: 1; background: transparent; border: 0; outline: none; font-size: 15px; width: 100%;
+    }
+    .search input::placeholder, .field textarea::placeholder { color: var(--faint); }
+    .field { margin: 0 0 10px; }
+    .field textarea { min-height: 72px; resize: none; line-height: 1.5; }
+    .hint { margin: 0 22px 8px; font-size: 12px; color: var(--faint); min-height: 18px; }
+
+    .sorts { display: flex; gap: 6px; padding: 0 16px 8px; overflow-x: auto; }
+    .sorts button {
+      flex-shrink: 0;
+      padding: 6px 12px; border-radius: 999px; font-size: 12px; font-weight: 700;
+      color: var(--faint); background: rgba(255,255,255,.04); border: 1px solid var(--line);
+    }
+    .sorts button.is-on { color: var(--ink); background: rgba(107,140,255,.18); border-color: rgba(107,140,255,.35); }
+
+    .list, .person-body { flex: 1; overflow: auto; -webkit-overflow-scrolling: touch; }
+    .list { padding: 4px 16px calc(24px + var(--safe-b)); }
+    .person-body { padding: 8px 20px 108px; }
+
+    .card {
+      display: grid;
+      grid-template-columns: 28px 52px 1fr;
+      gap: 10px; align-items: center;
+      width: 100%; text-align: left;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 12px;
+      margin-bottom: 10px;
+    }
+    .card.is-dim { opacity: .38; }
+    .rank-n {
+      font-family: var(--display); font-size: 16px; font-weight: 700; text-align: center; color: var(--faint);
+    }
+    .card.is-top1 .rank-n { color: var(--gold); }
+    .card.is-top2 .rank-n { color: #c5cbd8; }
+    .card.is-top3 .rank-n { color: #c48a5a; }
+    .avatar {
+      width: 52px; height: 52px; border-radius: 16px;
+      display: grid; place-items: center;
+      font-family: var(--display); font-size: 20px; font-weight: 700; color: #0b0d12;
+    }
+    .card h3 { font-size: 16px; font-weight: 700; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .card p { font-size: 12px; color: var(--muted); margin-top: 3px; line-height: 1.45; }
+    .meta { font-size: 11px; color: var(--faint); margin-top: 4px; }
+    .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+    .chip {
+      font-size: 11px; color: #c5cbd8;
+      background: rgba(107,140,255,.14);
+      border: 1px solid rgba(107,140,255,.22);
+      border-radius: 999px; padding: 2px 8px;
+    }
+    .badge {
+      display: inline-flex; align-items: center;
+      font-size: 10px; font-weight: 700;
+      border-radius: 999px; padding: 2px 7px;
+    }
+    .badge.ok { color: #0b0d12; background: var(--ok); }
+    .badge.gold { color: #0b0d12; background: var(--gold); }
+
+    .person-head { padding: calc(10px + var(--safe-t)) 12px 8px; display: flex; align-items: center; gap: 8px; }
+    .back { width: 36px; height: 36px; border-radius: 10px; background: rgba(255,255,255,.06); }
+    .who { display: flex; gap: 14px; align-items: center; margin-bottom: 12px; }
+    .who .avatar { width: 64px; height: 64px; font-size: 24px; border-radius: 20px; }
+    .stats {
+      display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin: 12px 0 4px;
+    }
+    .stat {
+      background: rgba(255,255,255,.04); border: 1px solid var(--line);
+      border-radius: 12px; padding: 10px 8px; text-align: center;
+    }
+    .stat b { display: block; font-size: 16px; margin-bottom: 2px; }
+    .stat span { font-size: 11px; color: var(--faint); }
+    .sec { margin-top: 18px; }
+    .sec h4 { font-size: 12px; letter-spacing: .08em; color: #a8b4ff; margin-bottom: 8px; }
+    .sec p, .exp, .cmt, .skill { font-size: 13px; color: var(--muted); line-height: 1.65; }
+    .exp, .cmt, .skill {
+      background: rgba(255,255,255,.04);
+      border: 1px solid var(--line);
+      border-radius: 12px; padding: 10px 12px; margin-bottom: 8px;
+    }
+    .exp strong, .cmt strong, .skill strong { color: var(--ink); display: block; margin-bottom: 2px; }
+    .skill .how { font-size: 12px; color: var(--faint); margin-top: 4px; }
+    .cmt-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+    .stars { color: var(--gold); letter-spacing: 1px; font-size: 12px; }
+    .note {
+      font-size: 12px; color: var(--faint); line-height: 1.55;
+      margin-top: 12px; padding: 10px 12px;
+      border-left: 2px solid rgba(107,140,255,.5);
+    }
+    .cta, .btn {
+      height: 48px; border-radius: 14px;
+      background: linear-gradient(135deg, #7b94ff, #4f6ef5);
+      font-weight: 700; font-size: 15px; width: 100%;
+    }
+    .cta {
+      position: absolute; left: 16px; right: 16px; bottom: calc(16px + var(--safe-b));
+      box-shadow: 0 8px 24px rgba(79,110,245,.35);
+    }
+    .btn { margin-top: 8px; }
+    .star-pick { display: flex; gap: 8px; margin: 0 0 10px; }
+    .star-pick button { font-size: 20px; color: var(--faint); }
+    .star-pick button.is-on { color: var(--gold); }
+    .empty { margin: 40px 24px; text-align: center; color: var(--muted); font-size: 14px; line-height: 1.7; }
+    .toast {
+      position: absolute; left: 50%; bottom: calc(28px + var(--safe-b));
+      transform: translateX(-50%);
+      background: #1c2436; border: 1px solid var(--line);
+      padding: 8px 14px; border-radius: 999px; font-size: 12px;
+      opacity: 0; pointer-events: none; transition: opacity .2s;
+      white-space: nowrap; z-index: 5;
+    }
+    .toast.is-on { opacity: 1; }
+  </style>
+</head>
+<body>
+  <div class="stage">
+    <div class="phone" id="app">
+      <div class="screen">
+
+        <section class="page is-on" id="page-hall">
+          <div class="top">
+            <div class="brand"><span class="brand-dot"></span><span>才艺</span></div>
+            <h1>周家在场</h1>
+            <p class="lead">家里人各会一样。选一位，回去跟 TA 说话。</p>
+          </div>
+          <label class="search">
+            <span aria-hidden="true">⌕</span>
+            <input id="q" type="search" placeholder="搜家人，或搜挂号、买票、外卖…" />
+          </label>
+          <div class="sorts" id="cats"></div>
+          <div class="sorts" id="sorts">
+            <button type="button" class="is-on" data-sort="score">综合</button>
+            <button type="button" data-sort="week">本周热门</button>
+            <button type="button" data-sort="rating">好评优先</button>
+          </div>
+          <p class="hint" id="hint">才艺挂在家人下面</p>
+          <div class="list" id="list"></div>
+        </section>
+
+        <section class="page" id="page-person"></section>
+        <div class="toast" id="toast"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const DEFAULT_BASE = "http://140.143.144.28";
+    const FALLBACK = [
+      {
+        id: "nainai",
+        name: "周奶奶",
+        initial: "奶",
+        color: "linear-gradient(145deg,#c9d4ff,#6b8cff)",
+        tagline: "家里挂号的事，找奶奶",
+        city: "南京",
+        tags: ["挂号", "医疗"],
+        rating: 4.9,
+        jobs: 328,
+        week: 41,
+        greeting: "我是周奶奶。鼓楼医院我熟。你说要挂哪科、哪天，我来问。",
+        skills: [
+          { id: "glyy", label: "鼓楼医院挂号", how: "问清科室和日期，帮你挂专家号", intents: ["鼓楼", "挂号", "挂专家", "看医生", "专家号"] }
+        ],
+        experience: [
+          { title: "先问清楚再挂", note: "科室、日期、专家还是普通号，问齐了再动手。" },
+          { title: "少让老人跑腿", note: "信息不齐不提交，避免空跑和占号。" }
+        ],
+        comments: [
+          { user: "家里人", rating: 5, text: "帮我妈挂上了专家号，一路问得很清楚。", time: "3天前" }
+        ]
+      },
+      {
+        id: "baba",
+        name: "周爸",
+        initial: "爸",
+        color: "linear-gradient(145deg,#d4c2ff,#7a62e8)",
+        tagline: "出差买票，找爸",
+        city: "南京",
+        tags: ["出行", "火车票"],
+        rating: 4.7,
+        jobs: 190,
+        week: 28,
+        greeting: "我是周爸。查车次、代下单我来；你确认行程，去支付宝付钱。",
+        skills: [
+          { id: "tuniu", label: "火车票代下单", how: "确认日期和席别后再下单，滑块时会停下来让你配合", intents: ["火车票", "买票", "高铁", "车次", "出行", "机票"] }
+        ],
+        experience: [
+          { title: "先确认日期和席别", note: "南京到上海这趟常坐，买错车最烦。" },
+          { title: "风控要真人配合", note: "下单若要滑块，会停下来让你划一下。" }
+        ],
+        comments: [
+          { user: "家里人", rating: 5, text: "周五下班那趟票帮我盯到了。", time: "2天前" }
+        ]
+      },
+      {
+        id: "mama",
+        name: "周妈",
+        initial: "妈",
+        color: "linear-gradient(145deg,#b8f0d8,#3ecf8e)",
+        tagline: "浦口这边看病，找妈",
+        city: "南京",
+        tags: ["挂号", "医疗"],
+        rating: 4.8,
+        jobs: 86,
+        week: 19,
+        greeting: "我是周妈。浦口中医院挂号送到支付宝确认页，你自己付钱。",
+        skills: [
+          { id: "njpkzyy", label: "浦口中医院挂号", how: "送到支付宝确认页，你自己付钱", intents: ["浦口", "中医院", "挂号"] }
+        ],
+        experience: [
+          { title: "送到确认页为止", note: "登录和付钱都在支付宝里，妈不代付。" }
+        ],
+        comments: [
+          { user: "家里人", rating: 5, text: "浦口那次直接送到支付宝确认页，自己付的。", time: "1周前" }
+        ]
+      },
+      {
+        id: "meimei",
+        name: "周妹",
+        initial: "妹",
+        color: "linear-gradient(145deg,#ffd4b8,#ff8a5b)",
+        tagline: "不想做饭，找妹",
+        city: "南京",
+        tags: ["外卖", "餐饮"],
+        rating: 4.6,
+        jobs: 64,
+        week: 22,
+        greeting: "我是周妹。帮你找到店，再送进美团自己点。我不代登录。",
+        skills: [
+          { id: "meituan_waimai", label: "美团外卖找店", how: "只送到店，登录和付钱都在美团里", intents: ["外卖", "点餐", "美团", "吃饭", "附近"] }
+        ],
+        experience: [
+          { title: "只送到店，不代下单", note: "登录和付钱都在美团里，这是她的边界。" }
+        ],
+        comments: [
+          { user: "家里人", rating: 5, text: "找到店就推进美团了，干净。", time: "4天前" }
+        ]
+      }
+    ];
+    let CARDS = FALLBACK.slice();
+
+    const CATS = ["全部", "挂号", "出行", "外卖"];
+    const state = {
+      page: "hall",
+      personId: null,
+      sort: "score",
+      cat: "全部",
+      served: {},
+      commentDraft: { rating: 5, text: "" },
+      apiBase: "",
+      booted: false
+    };
+
+    function $(id) { return document.getElementById(id); }
+    function personById(id) { return CARDS.find((p) => p.id === id); }
+    function commentsN(p) { return p.comments_n != null ? p.comments_n : (p.comments || []).length; }
+    function stars(n) { return "★★★★★".slice(0, Math.round(n)) + "☆☆☆☆☆".slice(Math.round(n)); }
+    function scoreOf(p) { return p.jobs * p.rating; }
+
+    function toast(msg) {
+      const el = $("toast");
+      el.textContent = msg;
+      el.classList.add("is-on");
+      clearTimeout(toast._t);
+      toast._t = setTimeout(() => el.classList.remove("is-on"), 1800);
+    }
+
+    function ranked(list) {
+      const copy = list.slice();
+      if (state.sort === "week") copy.sort((a, b) => b.week - a.week || b.rating - a.rating);
+      else if (state.sort === "rating") copy.sort((a, b) => b.rating - a.rating || b.jobs - a.jobs);
+      else copy.sort((a, b) => scoreOf(b) - scoreOf(a));
+      return copy;
+    }
+
+    function inCat(p) {
+      if (state.cat === "全部") return true;
+      return (p.tags || []).includes(state.cat) || (p.skills || []).some((s) => (s.label || "").includes(state.cat) || (s.intents || []).includes(state.cat));
+    }
+
+    function matchPeople(q) {
+      const s = String(q || "").trim().toLowerCase();
+      const base = ranked(CARDS.filter(inCat));
+      if (!s) return base.map((p) => ({ person: p, hit: true }));
+      return base.map((p) => {
+        const hay = [p.name, p.tagline, p.city, ...(p.tags || []), ...p.skills.flatMap((sk) => [sk.label, ...(sk.intents || [])])].join(" ").toLowerCase();
+        const hit = hay.includes(s) || p.skills.some((sk) => (sk.intents || []).some((i) => s.includes(i)));
+        return { person: p, hit };
+      }).sort((a, b) => Number(b.hit) - Number(a.hit));
+    }
+
+    function rankIndex(id) {
+      return ranked(CARDS).findIndex((p) => p.id === id);
+    }
+
+    function renderCats() {
+      $("cats").innerHTML = CATS.map((c) =>
+        `<button type="button" class="${c === state.cat ? "is-on" : ""}" data-cat="${c}">${c}</button>`
+      ).join("");
+    }
+
+    function renderHall() {
+      const q = $("q").value;
+      const rows = matchPeople(q);
+      const anyQ = String(q || "").trim();
+      const hits = rows.filter((r) => r.hit);
+      $("hint").textContent = anyQ
+        ? (hits.length ? "对上了：" + hits.map((r) => r.person.name).join("、") : "家里暂时没人对上")
+        : ({ score: "综合 = 完成单 × 好评", week: "按本周完成单排", rating: "按评分排" }[state.sort]);
+      if (!rows.length) {
+        $("list").innerHTML = `<div class="empty">这一类暂时还没有家人在场。</div>`;
+        return;
+      }
+      $("list").innerHTML = rows.map(({ person: p, hit }) => {
+        const ri = rankIndex(p.id);
+        const rank = ri >= 0 ? ri + 1 : "—";
+        const top = rank === 1 ? " is-top1" : rank === 2 ? " is-top2" : rank === 3 ? " is-top3" : "";
+        const dim = anyQ && !hit ? " is-dim" : "";
+        return `
+          <button class="card${top}${dim}" type="button" data-open="${p.id}">
+            <div class="rank-n">${rank}</div>
+            <div class="avatar" style="background:${p.color}">${p.initial}</div>
+            <div>
+              <h3>${p.name}${rank === 1 ? ' <span class="badge gold">榜首</span>' : ""}</h3>
+              <p>${p.tagline}</p>
+              <div class="meta">${stars(p.rating)} ${p.rating} · ${p.jobs} 单 · ${commentsN(p)} 评</div>
+              <div class="chips">${p.skills.map((s) => `<span class="chip">${s.label}</span>`).join("")}</div>
+            </div>
+          </button>`;
+      }).join("");
+    }
+
+    function renderPerson() {
+      const p = personById(state.personId);
+      if (!p) return;
+      const ri = rankIndex(p.id);
+      const rank = ri >= 0 ? "第 " + (ri + 1) + " 名" : "—";
+      const canComment = !!state.served[p.id];
+      const comments = (p.comments || []).map((c) => `
+        <div class="cmt">
+          <div class="cmt-head">
+            <strong>${c.user}</strong>
+            <span class="stars">${stars(c.rating)}</span>
+          </div>
+          <p>${c.text}</p>
+          <div class="meta">${c.time}</div>
+        </div>`).join("") || `<p>还没有评论。</p>`;
+
+      $("page-person").innerHTML = `
+        <div class="person-head">
+          <button class="back" type="button" data-go="hall">←</button>
+          <div class="brand" style="letter-spacing:.06em;text-transform:none">家人</div>
+        </div>
+        <div class="person-body">
+          <div class="who">
+            <div class="avatar" style="background:${p.color}">${p.initial}</div>
+            <div>
+              <h1 style="font-size:24px;margin:0">${p.name}</h1>
+              <p class="lead">${p.city} · ${p.tagline}</p>
+            </div>
+          </div>
+          <div class="stats">
+            <div class="stat"><b>${Number(p.rating || 0).toFixed(1)}</b><span>评分</span></div>
+            <div class="stat"><b>${p.jobs}</b><span>完成单</span></div>
+            <div class="stat"><b>${rank}</b><span>排行</span></div>
+          </div>
+          <p class="lead" style="margin-top:12px">${p.greeting || ""}</p>
+          <div class="sec">
+            <h4>才艺</h4>
+            ${(p.skills || []).map((s) => `<div class="skill"><strong>${s.label}</strong><div class="how">${s.how || ""}</div></div>`).join("")}
+          </div>
+          <div class="sec">
+            <h4>TA 怎么做</h4>
+            ${(p.experience || []).map((e) => `<div class="exp"><strong>${e.title}</strong>${e.note}</div>`).join("")}
+          </div>
+          <div class="sec">
+            <h4>评价（${commentsN(p)}）</h4>
+            ${comments}
+            ${canComment ? `
+              <div class="exp">
+                <strong>写评价</strong>
+                <div class="star-pick" id="star-pick">
+                  ${[1,2,3,4,5].map((n) => `<button type="button" data-star="${n}" class="${n <= state.commentDraft.rating ? "is-on" : ""}">★</button>`).join("")}
+                </div>
+                <label class="field"><textarea id="cmt-text" placeholder="办完再说">${state.commentDraft.text}</textarea></label>
+                <button class="btn" type="button" data-post-cmt="${p.id}">发布</button>
+              </div>`               : `<p class="note">跟 TA 说过话之后才能评价。</p>`}
+          </div>
+        </div>
+        <button class="cta" type="button" data-chat="${p.id}">跟 ${p.name} 说话</button>
+      `;
+    }
+
+    function show(page) {
+      if (page === "person" && !state.personId) page = "hall";
+      state.page = page;
+      document.querySelectorAll(".page").forEach((el) => el.classList.toggle("is-on", el.id === "page-" + page));
+      if (page === "hall") renderHall();
+      if (page === "person") renderPerson();
+    }
+
+    function hirePerson(id) {
+      const p = personById(id);
+      if (!p) return;
+      state.served[p.id] = true;
+      const payload = {
+        type: "showcase:hire",
+        personId: p.id,
+        personName: p.name,
+        skills: p.skills.map((s) => s.id),
+        tagline: p.tagline,
+      };
+      if (window.parent !== window) {
+        window.parent.postMessage(payload, "*");
+        toast("正在打开跟 " + p.name + " 说话");
+        return;
+      }
+      if (window.AndroidBridge && window.AndroidBridge.onShowcaseHire) {
+        window.AndroidBridge.onShowcaseHire(JSON.stringify(payload));
+        return;
+      }
+      toast("已选定 " + p.name);
+    }
+
+    $("q").addEventListener("input", renderHall);
+    document.addEventListener("click", (e) => {
+      const star = e.target.closest("[data-star]");
+      if (star) {
+        state.commentDraft.rating = Number(star.getAttribute("data-star"));
+        const ta = $("cmt-text");
+        if (ta) state.commentDraft.text = ta.value;
+        renderPerson();
+        return;
+      }
+      const post = e.target.closest("[data-post-cmt]");
+      if (post) {
+        const p = personById(post.getAttribute("data-post-cmt"));
+        const text = ($("cmt-text") && $("cmt-text").value.trim()) || "";
+        if (!text) { toast("写一句再发"); return; }
+        if (!p.comments) p.comments = [];
+        p.comments.unshift({ user: "我", rating: state.commentDraft.rating, text, time: "刚刚" });
+        state.commentDraft = { rating: 5, text: "" };
+        toast("评价已写上");
+        renderPerson();
+        return;
+      }
+      const cat = e.target.closest("[data-cat]");
+      if (cat) {
+        state.cat = cat.getAttribute("data-cat");
+        renderCats();
+        renderHall();
+        return;
+      }
+      const sort = e.target.closest("[data-sort]");
+      if (sort) {
+        state.sort = sort.getAttribute("data-sort");
+        document.querySelectorAll("[data-sort]").forEach((b) => b.classList.toggle("is-on", b === sort));
+        renderHall();
+        return;
+      }
+      const open = e.target.closest("[data-open]");
+      if (open) { openCard(open.getAttribute("data-open")); return; }
+      const chat = e.target.closest("[data-chat]");
+      if (chat) { hirePerson(chat.getAttribute("data-chat")); return; }
+      const go = e.target.closest("[data-go]");
+      if (go) { show(go.getAttribute("data-go")); }
+    });
+
+    const EMBED = window.parent !== window || !!(window.AndroidBridge && window.AndroidBridge.inShowcaseEmbed);
+    if (EMBED) {
+      document.querySelector(".stage")?.classList.add("is-embed");
+      document.body.insertAdjacentHTML("beforeend", "<style>html,body{height:100%;overflow:hidden}.stage.is-embed{background:#0b0d12;min-height:100%;height:100%;display:block}.stage.is-embed .phone{max-width:none;border-radius:0;border:0;box-shadow:none;height:100%;width:100%}</style>");
+    }
+
+    function apiBase() {
+      return (state.apiBase || DEFAULT_BASE).replace(/\/$/, "");
+    }
+
+    async function loadCards() {
+      try {
+        const r = await fetch(apiBase() + "/api/v1/cards");
+        const j = await r.json();
+        if (j && j.ok && Array.isArray(j.cards) && j.cards.length) {
+          CARDS = j.cards;
+          return true;
+        }
+      } catch (e) {}
+      CARDS = FALLBACK.slice();
+      return false;
+    }
+
+    async function openCard(id) {
+      state.personId = id;
+      try {
+        const r = await fetch(apiBase() + "/api/v1/cards/" + encodeURIComponent(id));
+        const j = await r.json();
+        if (j && j.ok && j.card) {
+          const i = CARDS.findIndex((c) => c.id === id);
+          if (i >= 0) CARDS[i] = j.card;
+          else CARDS.push(j.card);
+        }
+      } catch (e) {}
+      show("person");
+    }
+
+    async function boot(base) {
+      if (base) state.apiBase = base;
+      if (state.booted && !base) return;
+      state.booted = true;
+      await loadCards();
+      renderCats();
+      if (state.page === "person") renderPerson();
+      else renderHall();
+    }
+
+    window.addEventListener("message", (e) => {
+      const d = e && e.data;
+      if (!d || d.type !== "showcase:config") return;
+      boot(d.base || "");
+    });
+
+    renderCats();
+    renderHall();
+    setTimeout(function () { if (!state.apiBase) boot(""); }, 400);
+  </script>
+</body>
+</html>
