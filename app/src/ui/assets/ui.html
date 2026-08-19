@@ -1,0 +1,2448 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>虾米</title>
+<!-- 上：功能逻辑（script）｜ 下：界面（style + body） -->
+<script>
+/*
+ * ═══════════════════════════════════════════════════════════
+ *  虾米办 · 主界面逻辑（本文件：功能脚本在上，样式与 HTML 在下）
+ * ═══════════════════════════════════════════════════════════
+ *
+ *  1. 登录 / 注册 / Token 刷新
+ *  2. WebSocket 设备通道（连云端，收指令）
+ *  3. skill_request：云端蓝图 → 手机直连平台 → skill_result
+ *  4. 浏览器登录：navigate 打开登录页 / export_token / export_cookies（AndroidBridge）
+ *  5. 会话：列表 / 同步云端 / 置顶重命名删除
+ *  6. 聊天：发消息、轮询回复、验证码/提问、附件上传
+ *  7. 才艺展示厅：选人开聊（persona）
+ *  8. 我的：个人资料（就诊人等）本地+云端
+ *  9. 支付：open_external 跳系统浏览器
+ * 10. 皮肤主题：颜色 / 按钮 / 壁纸 / 图标
+ *
+ *  云端想事，手机动手；凭据只在本机。
+ * ═══════════════════════════════════════════════════════════
+ */
+
+
+
+const S = { base:'', token:'', userId:'', deviceId:'', curSkill:null, timer:null, ws:null, lastReply:'', askGate:null, view:'chat', waitingAsk:false, askId:'', skillCatalog:{} };
+const $ = id => document.getElementById(id);
+
+// ═══ 侧栏已废弃（改为全屏「对话列表」页）；closeSidebar 保留为空操作兼容原生调用 ═══
+function closeSidebar() {}
+// 弹层：点遮罩 / ✕ 关闭；未登录点顶部可重新打开登录
+function openConn() {
+  if (S.token) { showAccount(); return; }   // 已登录：点顶部状态弹账号信息，不再弹登录框
+  $('connModal').classList.add('show');
+}
+function closeConn() { $('connModal').classList.remove('show'); }
+// 已登录时点击顶部状态 → 账号信息弹层（邮箱 + 个人资料 + 退出登录）
+function showAccount() {
+  const em = localStorage.getItem('xiami_email') || '';
+  $('acctEmail').textContent = em || ((S.token || '').split('email=')[1] || '').split('&')[0] || '已登录';
+  $('accountModal').classList.add('show');
+}
+function closeAccount() { $('accountModal').classList.remove('show'); }
+function navTo(name) {
+  showView(name);
+}
+
+async function api(path, opts = {}) { return _api(path, opts, false); }
+async function _api(path, opts, retried) {
+  const headers = Object.assign({}, opts.headers || {});
+  if (!(opts.body instanceof FormData)) headers['Content-Type'] = 'application/json';
+  if (S.token) headers['Authorization'] = 'Bearer ' + S.token;
+  const res = await fetch(S.base + path, Object.assign({}, opts, { headers }));
+  // Access 过期(401) → 先用 Refresh 换新 Access，再重试一次
+  if (res.status === 401 && !retried && await tryRefresh()) return _api(path, opts, true);
+  if (!res.ok) { let d = 'HTTP ' + res.status; try { d = (await res.json()).detail || d; } catch (e) {} throw new Error(d); }
+  return res.json();
+}
+// 用 Refresh Token 换新 Access（服务端轮换）；失败则清登录态返回 false
+async function tryRefresh() {
+  const rt = localStorage.getItem('xiami_refresh');
+  if (!rt) return false;
+  try {
+    const res = await fetch(S.base + '/api/v1/auth/refresh', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: rt })
+    });
+    if (!res.ok) throw new Error('refresh-failed');
+    const j = await res.json();
+    if (!j.access_token) throw new Error('no-access');
+    S.token = j.access_token;
+    localStorage.setItem('xiami_token', j.access_token);
+    if (j.refresh_token) localStorage.setItem('xiami_refresh', j.refresh_token);
+    return true;
+  } catch (e) {
+    S.token=''; localStorage.removeItem('xiami_token'); localStorage.removeItem('xiami_refresh');
+    return false;
+  }
+}
+
+function getBase() {
+  // 云端地址：优先本地存储，默认本机/腾讯云（演示时改为局域网 IP）
+  return S.base || localStorage.getItem('xiami_base') || 'http://140.143.144.28';
+}
+
+// ═══ 视图切换 ═══
+const TITLES = { list:'对话列表', chat:'虾米', me:'我的', settings:'设置', showcase:'才艺' };
+const VIEWS = { list:'listView', chat:'chatView', me:'meView', settings:'settingsView', showcase:'showcaseView' };
+function showView(name) {
+  S.view = name;
+  Object.keys(VIEWS).forEach(v => $(VIEWS[v]).classList.toggle('active', v === name));
+  Object.keys(VIEWS).forEach(v => { const el = $('mi-' + v); if (el) el.classList.toggle('active', v === name); });
+  // 聊天/对话列表各自有返回入口，顶栏返回只在「我的/设置/才艺」显示
+  $('backBtn').style.display = (name === 'chat' || name === 'list') ? 'none' : 'block';
+  const sub = $('viewSub');
+  if (name === 'chat') {
+    const sess = curSess();
+    const hired = sess && sess.persona && sess.persona.person_id;
+    $('viewTitle').textContent = hired
+      ? (sess.persona.person_name || sess.name || '帮手')
+      : (sess && sess.name ? sess.name : '虾米');
+    if (sub) sub.style.display = 'block';
+    renderChat();
+  } else if (name === 'list') {
+    $('viewTitle').textContent = '对话列表';
+    if (sub) sub.style.display = 'none';
+    renderConvList();
+  } else {
+    $('viewTitle').textContent = TITLES[name] || '虾米';
+    if (sub) sub.style.display = 'none';
+    if (name === 'me') loadMe();
+    if (name === 'settings') renderSettings();
+    if (name === 'showcase') loadShowcaseFrame();
+  }
+}
+
+/** Android WebView 拦 file:// iframe，改为原生读 assets 再 srcdoc 注入 */
+function loadShowcaseFrame() {
+  const f = $('showcaseFrame');
+  if (!f) return;
+  const sendConfig = function () {
+    try {
+      f.contentWindow.postMessage({ type:'showcase:config', base: (S.base || getBase()) }, '*');
+    } catch (e) {}
+  };
+  if (f.dataset.loaded === '1') { sendConfig(); return; }
+  f.onload = sendConfig;
+  try {
+    if (window.AndroidBridge && window.AndroidBridge.readAsset) {
+      const html = window.AndroidBridge.readAsset('showcase/index.html');
+      if (html) {
+        f.srcdoc = html;
+        f.dataset.loaded = '1';
+        return;
+      }
+    }
+  } catch (e) {}
+  f.src = 'file:///android_asset/showcase/index.html';
+  f.dataset.loaded = '1';
+}
+
+/** 才艺里选定人 → 这场对话跟 TA 聊（persona 写入会话；人选手动，不经 LLM） */
+async function startPersonChatFromShowcase(payload) {
+  if (!payload || !payload.personId) return;
+  if (!S.token) { openConn(); appendMsg('sys', '请先登录，再跟家人说话'); return; }
+  loadSessions();
+  const persona = {
+    person_id: payload.personId,
+    person_name: payload.personName || payload.personId,
+    skills: Array.isArray(payload.skills) ? payload.skills : [],
+  };
+  let id = 'sess_' + Date.now();
+  let name = payload.personName || '新对话';
+  let saved = persona;
+  try {
+    const r = await api('/api/v1/conversations', { method:'POST', body: JSON.stringify({ type:'chat', persona }) });
+    const c = r.conversation || {};
+    if (c.conversation_id) {
+      id = c.conversation_id;
+      name = c.title || name;
+      if (c.persona && c.persona.person_id) saved = c.persona;
+    } else {
+      appendMsg('sys', '创建对话失败，请重试');
+      return;
+    }
+  } catch (e) {
+    appendMsg('sys', '创建对话失败：' + (e.message || e));
+    return;
+  }
+  S.sessions[id] = { id, type:'chat', name, persona: saved, messages:[], pinned:false, lastAt:Date.now(), _synced:true };
+  S.activeSessId = id;
+  saveSessions();
+  appendMsg('bot', '这场对话是在跟 **' + esc(saved.person_name || name) + '** 聊。TA 的才艺只在这里生效；直接说要办的事就行。');
+  renderConvList();
+  showView('chat');
+}
+
+window.addEventListener('message', (e) => {
+  const d = e && e.data;
+  if (!d || d.type !== 'showcase:hire') return;
+  startPersonChatFromShowcase(d);
+});
+function renderSettings() {
+  const logout = $('setLogout');
+  if (logout) logout.style.display = S.token ? 'block' : 'none';
+  const acct = $('setAcct');
+  if (acct) {
+    const em = localStorage.getItem('xiami_email')
+      || ((S.token || '').split('email=')[1] || '').split('&')[0] || '';
+    acct.textContent = em || '未登录';
+  }
+  renderThemePickers();
+}
+
+// ═══ 外观：一整套皮肤（颜色+按钮+壁纸+字体+图标+机器人）═══
+
+
+// ─── 以下为界面皮肤 / 主题（颜色·按钮·壁纸·图标）───
+const BTN_STYLES = {
+  soft: { demoRadius:'12px', vars:{
+    '--btn-radius':'12px','--btn-radius-pill':'22px','--btn-radius-sm':'18px',
+    '--btn-bg':'var(--accent-grad)','--btn-fg':'#fff','--btn-border':'none',
+    '--btn-shadow':'0 4px 12px var(--accent-shadow)','--btn-weight':'600','--btn-tracking':'0','--btn-transform':'none',
+    '--ghost-bg':'var(--bg2)','--ghost-fg':'var(--accent)','--ghost-border':'1px solid var(--accent)','--ghost-shadow':'none',
+    '--attach-radius':'50%','--attach-bg':'var(--accent-soft)','--attach-fg':'var(--accent)','--attach-border':'none','--attach-shadow':'none','--input-radius':'22px'
+  }},
+  candy: { demoRadius:'999px', vars:{
+    '--btn-radius':'999px','--btn-radius-pill':'999px','--btn-radius-sm':'999px',
+    '--btn-bg':'var(--accent-grad)','--btn-fg':'#fff','--btn-border':'none',
+    '--btn-shadow':'0 6px 16px var(--accent-shadow)','--btn-weight':'700','--btn-tracking':'.2px','--btn-transform':'none',
+    '--ghost-bg':'var(--accent-soft)','--ghost-fg':'var(--accent)','--ghost-border':'none','--ghost-shadow':'none',
+    '--attach-radius':'999px','--attach-bg':'var(--accent-grad)','--attach-fg':'#fff','--attach-border':'none','--attach-shadow':'0 4px 10px var(--accent-shadow)','--input-radius':'999px'
+  }},
+  flat: { demoRadius:'10px', vars:{
+    '--btn-radius':'10px','--btn-radius-pill':'12px','--btn-radius-sm':'10px',
+    '--btn-bg':'var(--accent)','--btn-fg':'#fff','--btn-border':'none',
+    '--btn-shadow':'none','--btn-weight':'600','--btn-tracking':'0','--btn-transform':'none',
+    '--ghost-bg':'transparent','--ghost-fg':'var(--accent)','--ghost-border':'1.5px solid var(--accent)','--ghost-shadow':'none',
+    '--attach-radius':'12px','--attach-bg':'var(--accent-soft)','--attach-fg':'var(--accent)','--attach-border':'none','--attach-shadow':'none','--input-radius':'12px'
+  }},
+  square: { demoRadius:'4px', vars:{
+    '--btn-radius':'4px','--btn-radius-pill':'6px','--btn-radius-sm':'4px',
+    '--btn-bg':'var(--accent)','--btn-fg':'#fff','--btn-border':'none',
+    '--btn-shadow':'3px 3px 0 var(--accent-soft)','--btn-weight':'700','--btn-tracking':'.5px','--btn-transform':'none',
+    '--ghost-bg':'var(--bg2)','--ghost-fg':'var(--accent)','--ghost-border':'2px solid var(--accent)','--ghost-shadow':'none',
+    '--attach-radius':'4px','--attach-bg':'var(--accent)','--attach-fg':'#fff','--attach-border':'none','--attach-shadow':'2px 2px 0 var(--accent-soft)','--input-radius':'6px'
+  }},
+  outline: { demoRadius:'12px', vars:{
+    '--btn-radius':'12px','--btn-radius-pill':'20px','--btn-radius-sm':'14px',
+    '--btn-bg':'transparent','--btn-fg':'var(--accent)','--btn-border':'2px solid var(--accent)',
+    '--btn-shadow':'none','--btn-weight':'700','--btn-tracking':'.3px','--btn-transform':'none',
+    '--ghost-bg':'var(--accent-soft)','--ghost-fg':'var(--accent)','--ghost-border':'none','--ghost-shadow':'none',
+    '--attach-radius':'50%','--attach-bg':'transparent','--attach-fg':'var(--accent)','--attach-border':'2px solid var(--accent)','--attach-shadow':'none','--input-radius':'16px'
+  }},
+  glow: { demoRadius:'14px', vars:{
+    '--btn-radius':'14px','--btn-radius-pill':'24px','--btn-radius-sm':'16px',
+    '--btn-bg':'var(--accent-grad)','--btn-fg':'#fff','--btn-border':'none',
+    '--btn-shadow':'0 8px 22px var(--accent-shadow), 0 0 0 1px rgba(255,255,255,.12) inset','--btn-weight':'700','--btn-tracking':'0','--btn-transform':'none',
+    '--ghost-bg':'var(--bg2)','--ghost-fg':'var(--accent)','--ghost-border':'1px solid var(--line2)','--ghost-shadow':'0 4px 14px rgba(0,0,0,.08)',
+    '--attach-radius':'16px','--attach-bg':'var(--accent-soft)','--attach-fg':'var(--accent)','--attach-border':'none','--attach-shadow':'0 6px 14px var(--accent-shadow)','--input-radius':'18px'
+  }},
+  neon: { demoRadius:'8px', vars:{
+    '--btn-radius':'8px','--btn-radius-pill':'10px','--btn-radius-sm':'8px',
+    '--btn-bg':'transparent','--btn-fg':'var(--accent2)','--btn-border':'1.5px solid var(--accent)',
+    '--btn-shadow':'0 0 10px var(--accent-shadow), 0 0 22px var(--accent-shadow)','--btn-weight':'700','--btn-tracking':'1px','--btn-transform':'uppercase',
+    '--ghost-bg':'transparent','--ghost-fg':'var(--muted2)','--ghost-border':'1px solid var(--line2)','--ghost-shadow':'none',
+    '--attach-radius':'8px','--attach-bg':'transparent','--attach-fg':'var(--accent2)','--attach-border':'1.5px solid var(--accent)','--attach-shadow':'0 0 12px var(--accent-shadow)','--input-radius':'10px'
+  }},
+  solid: { demoRadius:'8px', vars:{
+    '--btn-radius':'8px','--btn-radius-pill':'10px','--btn-radius-sm':'8px',
+    '--btn-bg':'var(--accent)','--btn-fg':'#fff','--btn-border':'none',
+    '--btn-shadow':'0 3px 0 rgba(0,0,0,.22)','--btn-weight':'800','--btn-tracking':'.4px','--btn-transform':'none',
+    '--ghost-bg':'var(--hover)','--ghost-fg':'var(--text2)','--ghost-border':'1px solid var(--line2)','--ghost-shadow':'none',
+    '--attach-radius':'10px','--attach-bg':'var(--accent)','--attach-fg':'#fff','--attach-border':'none','--attach-shadow':'0 2px 0 rgba(0,0,0,.2)','--input-radius':'10px'
+  }},
+  glass: { demoRadius:'16px', vars:{
+    '--btn-radius':'16px','--btn-radius-pill':'20px','--btn-radius-sm':'16px',
+    '--btn-bg':'var(--accent-soft)','--btn-fg':'var(--accent)','--btn-border':'1px solid rgba(255,255,255,.35)',
+    '--btn-shadow':'0 8px 24px rgba(0,0,0,.08), inset 0 1px 0 rgba(255,255,255,.35)','--btn-weight':'700','--btn-tracking':'0','--btn-transform':'none',
+    '--ghost-bg':'transparent','--ghost-fg':'var(--muted2)','--ghost-border':'1px solid var(--line2)','--ghost-shadow':'none',
+    '--attach-radius':'14px','--attach-bg':'var(--accent-soft)','--attach-fg':'var(--accent)','--attach-border':'1px solid rgba(255,255,255,.3)','--attach-shadow':'inset 0 1px 0 rgba(255,255,255,.25)','--input-radius':'16px'
+  }},
+  brutal: { demoRadius:'0px', vars:{
+    '--btn-radius':'0px','--btn-radius-pill':'0px','--btn-radius-sm':'0px',
+    '--btn-bg':'var(--accent)','--btn-fg':'#fff','--btn-border':'2px solid var(--text2)',
+    '--btn-shadow':'4px 4px 0 var(--text2)','--btn-weight':'800','--btn-tracking':'1px','--btn-transform':'uppercase',
+    '--ghost-bg':'var(--bg2)','--ghost-fg':'var(--text2)','--ghost-border':'2px solid var(--text2)','--ghost-shadow':'3px 3px 0 var(--text2)',
+    '--attach-radius':'0px','--attach-bg':'var(--bg2)','--attach-fg':'var(--text2)','--attach-border':'2px solid var(--text2)','--attach-shadow':'2px 2px 0 var(--text2)','--input-radius':'0px'
+  }}
+};
+
+const WALLS = {
+  plain: 'var(--bg)',
+  soft_l: 'linear-gradient(160deg,#dbeafe,#f8fafc 48%,#ede9fe)',
+  soft_d: 'linear-gradient(160deg,#1e3a5f,#0f172a 48%,#312e81)',
+  forest_l: 'linear-gradient(160deg,#d1fae5,#ecfdf5 40%,#f0fdf4)',
+  forest_d: 'linear-gradient(160deg,#022c22,#052e16 42%,#14532d)',
+  bloom_l: 'radial-gradient(circle at 28% 18%,#fda4af77,transparent 42%),radial-gradient(circle at 82% 72%,#fde68a66,transparent 40%),#fff7ed',
+  dusk_l: 'linear-gradient(180deg,#bfdbfe,#fed7aa 55%,#fef3c7)',
+  dusk_d: 'linear-gradient(180deg,#0c1a2e,#431407 55%,#78350f)',
+  aurora_l: 'linear-gradient(135deg,#cffafe,#ede9fe 50%,#fce7f3)',
+  aurora_d: 'linear-gradient(135deg,#083344,#312e81 50%,#4a044e)',
+  wave_l: 'radial-gradient(ellipse at 15% 0%,#93c5fd88 0%,transparent 52%),radial-gradient(ellipse at 85% 100%,#c4b5fd77 0%,transparent 48%),#eff6ff',
+  stars_d: 'radial-gradient(circle at 18% 22%,rgba(255,255,255,.5) 1px,transparent 2px),radial-gradient(circle at 72% 38%,rgba(255,255,255,.35) 1px,transparent 2px),radial-gradient(circle at 42% 68%,rgba(255,255,255,.28) 1px,transparent 2px),linear-gradient(180deg,#020617,#1e1b4b)',
+  mesh_l: 'linear-gradient(#94a3b833 1px,transparent 1px),linear-gradient(90deg,#94a3b833 1px,transparent 1px),#f8fafc',
+  mesh_d: 'linear-gradient(#64748b33 1px,transparent 1px),linear-gradient(90deg,#64748b33 1px,transparent 1px),#0f172a',
+  cyber_d: 'radial-gradient(ellipse at 15% 0%,#0369a188 0%,transparent 52%),radial-gradient(ellipse at 85% 100%,#6d28d977 0%,transparent 48%),#0b1220'
+};
+
+const FONTS = {
+  system: { css: '-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif', display: null, google: '' },
+  round: { css: '"Nunito","PingFang SC","Hiragino Sans GB",sans-serif', display: '"Nunito","PingFang SC",sans-serif', google: 'Nunito:wght@500;700;800' },
+  soft: { css: '"Quicksand","PingFang SC","Hiragino Sans GB",sans-serif', display: '"Quicksand","PingFang SC",sans-serif', google: 'Quicksand:wght@500;700' },
+  serif: { css: '"Noto Serif SC","Songti SC","STSong",serif', display: '"Noto Serif SC","Songti SC",serif', google: 'Noto+Serif+SC:wght@500;700' },
+  elegant: { css: '"ZCOOL XiaoWei","STKaiti","KaiTi",serif', display: '"ZCOOL XiaoWei","KaiTi",serif', google: 'ZCOOL+XiaoWei' },
+  tech: { css: '"Rajdhani","PingFang SC",sans-serif', display: '"Orbitron","Rajdhani",sans-serif', google: 'Rajdhani:wght@500;700|Orbitron:wght@600;700' },
+  mono: { css: '"IBM Plex Mono","SFMono-Regular",Menlo,Consolas,monospace', display: '"IBM Plex Mono",Menlo,monospace', google: 'IBM+Plex+Mono:wght@500;700' },
+  strong: { css: '"Rubik","PingFang SC",sans-serif', display: '"Rubik","PingFang SC",sans-serif', google: 'Rubik:wght@500;700;800' }
+};
+
+function skinPack(o) { return o; }
+
+const THEMES = {
+  classic: skinPack({
+    name:'虾米蓝', tag:'清爽圆角 · 日常助手', group:'light',
+    swatch:'linear-gradient(135deg,#dbeafe,#3d7eff)', btn:'soft', wall:'soft_l', wallSize:'',
+    font:'system', avatar:'24px', letter:'0',
+    icons:{ bot:'🦐', attach:'📷', me:'👤', settings:'⚙️', chat:'💬', skill:'✨', about:'ℹ️', out:'↩', new:'＋' },
+    vars:{
+      '--bg':'#f6f7fb','--bg2':'#fff','--text':'#1f2937','--text2':'#111827','--muted':'#9ca3af','--muted2':'#6b7280',
+      '--line':'#f0f1f5','--line2':'#e5e8f0','--line3':'#f3f4f8','--accent':'#3d7eff','--accent2':'#5aa2ff',
+      '--accent-soft':'#e8f2ff','--accent-grad':'linear-gradient(135deg,#5aa2ff,#3d7eff)',
+      '--accent-shadow':'rgba(61,126,255,.28)','--accent-ring':'rgba(61,126,255,.14)',
+      '--input-bg':'#f7f8fb','--hover':'#f7f8fb','--me-hero':'linear-gradient(180deg,#e7f0ff,#f6f9ff)',
+      '--code-bg':'#eef1f9','--code-fg':'#c0272d','--pre-bg':'#f6f8fb','--sys-bg':'#fef3c7','--sys-fg':'#92400e',
+      '--btn-disabled':'#a9cdff','--search-bg':'#f4f6fa','--box-shadow':'0 1px 2px rgba(16,24,40,.04),0 4px 12px rgba(16,24,40,.05)',
+      '--modal-mask':'rgba(15,23,42,.45)'
+    }
+  }),
+  mint: skinPack({
+    name:'森系清新', tag:'扁平浅绿 · 自然感', group:'light',
+    swatch:'linear-gradient(135deg,#d1fae5,#10b981)', btn:'flat', wall:'forest_l', wallSize:'',
+    font:'round', avatar:'18px', letter:'.2px',
+    icons:{ bot:'🌿', attach:'🍃', me:'🪴', settings:'🔧', chat:'💬', skill:'🌱', about:'ℹ️', out:'↩', new:'＋' },
+    vars:{
+      '--bg':'#f3faf7','--bg2':'#fff','--text':'#1f2937','--text2':'#064e3b','--muted':'#6b9080','--muted2':'#4b7160',
+      '--line':'#e6f2ec','--line2':'#cfe5da','--line3':'#eaf6f0','--accent':'#10b981','--accent2':'#34d399',
+      '--accent-soft':'#d1fae5','--accent-grad':'linear-gradient(135deg,#34d399,#10b981)',
+      '--accent-shadow':'rgba(16,185,129,.28)','--accent-ring':'rgba(16,185,129,.16)',
+      '--input-bg':'#f3faf7','--hover':'#eef8f3','--me-hero':'linear-gradient(180deg,#d1fae5,#f3faf7)',
+      '--code-bg':'#e6f7ef','--code-fg':'#047857','--pre-bg':'#eef8f3','--sys-bg':'#ecfdf5','--sys-fg':'#065f46',
+      '--btn-disabled':'#86efac','--search-bg':'#eaf6f0','--box-shadow':'0 1px 2px rgba(6,78,59,.04),0 4px 12px rgba(6,78,59,.06)',
+      '--modal-mask':'rgba(6,78,59,.4)'
+    }
+  }),
+  peach: skinPack({
+    name:'蜜桃软糖', tag:'糖果胶囊 · 可爱风', group:'light',
+    swatch:'linear-gradient(135deg,#ffe4e6,#f43f5e)', btn:'candy', wall:'bloom_l', wallSize:'',
+    font:'soft', avatar:'50%', letter:'.15px',
+    icons:{ bot:'🍡', attach:'🎀', me:'🧸', settings:'💅', chat:'💌', skill:'🌸', about:'ℹ️', out:'↩', new:'＋' },
+    vars:{
+      '--bg':'#fff7f8','--bg2':'#fff','--text':'#3f1f24','--text2':'#881337','--muted':'#b07a84','--muted2':'#9a5b66',
+      '--line':'#fce7eb','--line2':'#f5cdd5','--line3':'#fdeef1','--accent':'#f43f5e','--accent2':'#fb7185',
+      '--accent-soft':'#ffe4e6','--accent-grad':'linear-gradient(135deg,#fb7185,#f43f5e)',
+      '--accent-shadow':'rgba(244,63,94,.28)','--accent-ring':'rgba(244,63,94,.16)',
+      '--input-bg':'#fff5f7','--hover':'#fff1f3','--me-hero':'linear-gradient(180deg,#ffe4e6,#fff7f8)',
+      '--code-bg':'#ffe4e6','--code-fg':'#be123c','--pre-bg':'#fff1f3','--sys-bg':'#fff1f2','--sys-fg':'#9f1239',
+      '--btn-disabled':'#fda4af','--search-bg':'#fdeef1','--box-shadow':'0 1px 2px rgba(136,19,55,.04),0 4px 12px rgba(136,19,55,.06)',
+      '--modal-mask':'rgba(136,19,55,.4)'
+    }
+  }),
+  amber: skinPack({
+    name:'秋日琥珀', tag:'厚实块面 · 温暖衬线', group:'light',
+    swatch:'linear-gradient(135deg,#fef3c7,#f59e0b)', btn:'solid', wall:'dusk_l', wallSize:'',
+    font:'serif', avatar:'12px', letter:'.1px',
+    icons:{ bot:'🦊', attach:'📎', me:'👤', settings:'🗂️', chat:'📔', skill:'🍁', about:'ℹ️', out:'↩', new:'＋' },
+    vars:{
+      '--bg':'#fffaf0','--bg2':'#fff','--text':'#3b2a0f','--text2':'#78350f','--muted':'#a8895a','--muted2':'#8a6a3a',
+      '--line':'#f5e8d0','--line2':'#e8d4ae','--line3':'#f8efdc','--accent':'#f59e0b','--accent2':'#fbbf24',
+      '--accent-soft':'#fef3c7','--accent-grad':'linear-gradient(135deg,#fbbf24,#f59e0b)',
+      '--accent-shadow':'rgba(245,158,11,.3)','--accent-ring':'rgba(245,158,11,.18)',
+      '--input-bg':'#fff8eb','--hover':'#fff6e4','--me-hero':'linear-gradient(180deg,#fef3c7,#fffaf0)',
+      '--code-bg':'#fef3c7','--code-fg':'#b45309','--pre-bg':'#fff8eb','--sys-bg':'#fef3c7','--sys-fg':'#92400e',
+      '--btn-disabled':'#fcd34d','--search-bg':'#f8efdc','--box-shadow':'0 1px 2px rgba(120,53,15,.04),0 4px 12px rgba(120,53,15,.06)',
+      '--modal-mask':'rgba(120,53,15,.4)'
+    }
+  }),
+  violet: skinPack({
+    name:'星尘紫', tag:'柔光浮起 · 文艺感', group:'light',
+    swatch:'linear-gradient(135deg,#ede9fe,#7c3aed)', btn:'glow', wall:'aurora_l', wallSize:'',
+    font:'elegant', avatar:'20px', letter:'.3px',
+    icons:{ bot:'✨', attach:'🔮', me:'🕊️', settings:'✦', chat:'💫', skill:'🌟', about:'ℹ️', out:'↩', new:'＋' },
+    vars:{
+      '--bg':'#f7f5ff','--bg2':'#fff','--text':'#2e1f4d','--text2':'#4c1d95','--muted':'#8b7aa8','--muted2':'#6d5a8f',
+      '--line':'#ebe4fc','--line2':'#d8cef3','--line3':'#f0ebff','--accent':'#7c3aed','--accent2':'#a78bfa',
+      '--accent-soft':'#ede9fe','--accent-grad':'linear-gradient(135deg,#a78bfa,#7c3aed)',
+      '--accent-shadow':'rgba(124,58,237,.28)','--accent-ring':'rgba(124,58,237,.16)',
+      '--input-bg':'#f5f2ff','--hover':'#f1edff','--me-hero':'linear-gradient(180deg,#ede9fe,#f7f5ff)',
+      '--code-bg':'#ede9fe','--code-fg':'#6d28d9','--pre-bg':'#f5f2ff','--sys-bg':'#f5f3ff','--sys-fg':'#5b21b6',
+      '--btn-disabled':'#c4b5fd','--search-bg':'#f0ebff','--box-shadow':'0 1px 2px rgba(76,29,149,.04),0 4px 12px rgba(76,29,149,.06)',
+      '--modal-mask':'rgba(76,29,149,.4)'
+    }
+  }),
+  ocean: skinPack({
+    name:'深海青', tag:'玻璃拟态 · 清透感', group:'light',
+    swatch:'linear-gradient(135deg,#cffafe,#0891b2)', btn:'glass', wall:'wave_l', wallSize:'',
+    font:'round', avatar:'16px', letter:'0',
+    icons:{ bot:'🐙', attach:'🫧', me:'🌊', settings:'🧭', chat:'💬', skill:'🪸', about:'ℹ️', out:'↩', new:'＋' },
+    vars:{
+      '--bg':'#f2fbfd','--bg2':'#fff','--text':'#164e63','--text2':'#155e75','--muted':'#5f8a97','--muted2':'#4a7380',
+      '--line':'#d9eef3','--line2':'#bfe0e9','--line3':'#e7f5f8','--accent':'#0891b2','--accent2':'#22d3ee',
+      '--accent-soft':'#cffafe','--accent-grad':'linear-gradient(135deg,#22d3ee,#0891b2)',
+      '--accent-shadow':'rgba(8,145,178,.28)','--accent-ring':'rgba(8,145,178,.16)',
+      '--input-bg':'#f0fafc','--hover':'#e8f6f9','--me-hero':'linear-gradient(180deg,#cffafe,#f2fbfd)',
+      '--code-bg':'#cffafe','--code-fg':'#0e7490','--pre-bg':'#ecfeff','--sys-bg':'#ecfeff','--sys-fg':'#155e75',
+      '--btn-disabled':'#67e8f9','--search-bg':'#e7f5f8','--box-shadow':'0 1px 2px rgba(21,94,117,.04),0 4px 12px rgba(21,94,117,.06)',
+      '--modal-mask':'rgba(21,94,117,.4)'
+    }
+  }),
+  midnight: skinPack({
+    name:'午夜都市', tag:'柔和暗色 · 星空壁', group:'dark',
+    swatch:'linear-gradient(135deg,#1e293b,#3b82f6)', btn:'soft', wall:'stars_d', wallSize:'',
+    font:'system', avatar:'22px', letter:'0',
+    icons:{ bot:'🌙', attach:'📷', me:'👤', settings:'⚙️', chat:'💬', skill:'⭐', about:'ℹ️', out:'↩', new:'＋' },
+    vars:{
+      '--bg':'#0f172a','--bg2':'#1e293b','--text':'#e2e8f0','--text2':'#f8fafc','--muted':'#94a3b8','--muted2':'#cbd5e1',
+      '--line':'#334155','--line2':'#475569','--line3':'#2a3648','--accent':'#3b82f6','--accent2':'#60a5fa',
+      '--accent-soft':'#1e3a5f','--accent-grad':'linear-gradient(135deg,#60a5fa,#3b82f6)',
+      '--accent-shadow':'rgba(59,130,246,.35)','--accent-ring':'rgba(59,130,246,.22)',
+      '--input-bg':'#0b1220','--hover':'#243247','--me-hero':'linear-gradient(180deg,#1e3a5f,#0f172a)',
+      '--code-bg':'#1e293b','--code-fg':'#93c5fd','--pre-bg':'#0b1220','--sys-bg':'#422006','--sys-fg':'#fde68a',
+      '--btn-disabled':'#334155','--search-bg':'#0b1220','--box-shadow':'0 1px 2px rgba(0,0,0,.3),0 4px 14px rgba(0,0,0,.35)',
+      '--modal-mask':'rgba(2,6,23,.65)'
+    }
+  }),
+  charcoal: skinPack({
+    name:'石墨工业', tag:'利落直角 · 等宽感', group:'dark',
+    swatch:'linear-gradient(135deg,#27272a,#a1a1aa)', btn:'square', wall:'mesh_d', wallSize:'22px 22px, 22px 22px, auto',
+    font:'mono', avatar:'6px', letter:'.4px',
+    icons:{ bot:'⚙️', attach:'📁', me:'👤', settings:'🛠️', chat:'⌨️', skill:'🔩', about:'ℹ️', out:'↩', new:'＋' },
+    vars:{
+      '--bg':'#18181b','--bg2':'#27272a','--text':'#e4e4e7','--text2':'#fafafa','--muted':'#a1a1aa','--muted2':'#d4d4d8',
+      '--line':'#3f3f46','--line2':'#52525b','--line3':'#2e2e33','--accent':'#a1a1aa','--accent2':'#d4d4d8',
+      '--accent-soft':'#3f3f46','--accent-grad':'linear-gradient(135deg,#d4d4d8,#71717a)',
+      '--accent-shadow':'rgba(161,161,170,.28)','--accent-ring':'rgba(161,161,170,.2)',
+      '--input-bg':'#111113','--hover':'#2e2e33','--me-hero':'linear-gradient(180deg,#3f3f46,#18181b)',
+      '--code-bg':'#27272a','--code-fg':'#fca5a5','--pre-bg':'#111113','--sys-bg':'#3f2a0a','--sys-fg':'#fde68a',
+      '--btn-disabled':'#52525b','--search-bg':'#111113','--box-shadow':'0 1px 2px rgba(0,0,0,.35),0 4px 14px rgba(0,0,0,.4)',
+      '--modal-mask':'rgba(0,0,0,.7)'
+    }
+  }),
+  abyss: skinPack({
+    name:'霓虹深渊', tag:'霓虹发光 · 科幻风', group:'dark',
+    swatch:'linear-gradient(135deg,#2e1065,#a855f7)', btn:'neon', wall:'aurora_d', wallSize:'',
+    font:'tech', avatar:'10px', letter:'.6px',
+    icons:{ bot:'👾', attach:'📼', me:'🕶️', settings:'🎛️', chat:'📡', skill:'🧬', about:'ℹ️', out:'↩', new:'＋' },
+    vars:{
+      '--bg':'#13081f','--bg2':'#1f1233','--text':'#e9d5ff','--text2':'#f5f3ff','--muted':'#a78bfa','--muted2':'#c4b5fd',
+      '--line':'#3b2460','--line2':'#4c2f78','--line3':'#2a1844','--accent':'#a855f7','--accent2':'#c084fc',
+      '--accent-soft':'#3b1d63','--accent-grad':'linear-gradient(135deg,#c084fc,#a855f7)',
+      '--accent-shadow':'rgba(168,85,247,.35)','--accent-ring':'rgba(168,85,247,.22)',
+      '--input-bg':'#0e0618','--hover':'#2a1844','--me-hero':'linear-gradient(180deg,#3b1d63,#13081f)',
+      '--code-bg':'#1f1233','--code-fg':'#e9d5ff','--pre-bg':'#0e0618','--sys-bg':'#3b2460','--sys-fg':'#f5d0fe',
+      '--btn-disabled':'#4c2f78','--search-bg':'#0e0618','--box-shadow':'0 1px 2px rgba(0,0,0,.35),0 4px 14px rgba(76,29,149,.35)',
+      '--modal-mask':'rgba(19,8,31,.72)'
+    }
+  }),
+  oled: skinPack({
+    name:'极客绿', tag:'描边空心 · OLED 黑', group:'dark',
+    swatch:'linear-gradient(135deg,#000,#22c55e)', btn:'outline', wall:'plain', wallSize:'',
+    font:'mono', avatar:'8px', letter:'.5px',
+    icons:{ bot:'🔋', attach:'💾', me:'👤', settings:'⌨️', chat:'>_', skill:'🧩', about:'ℹ️', out:'↩', new:'＋' },
+    vars:{
+      '--bg':'#000000','--bg2':'#111111','--text':'#ededed','--text2':'#ffffff','--muted':'#888','--muted2':'#bbb',
+      '--line':'#222','--line2':'#333','--line3':'#1a1a1a','--accent':'#22c55e','--accent2':'#4ade80',
+      '--accent-soft':'#052e16','--accent-grad':'linear-gradient(135deg,#4ade80,#22c55e)',
+      '--accent-shadow':'rgba(34,197,94,.35)','--accent-ring':'rgba(34,197,94,.22)',
+      '--input-bg':'#0a0a0a','--hover':'#1a1a1a','--me-hero':'linear-gradient(180deg,#052e16,#000)',
+      '--code-bg':'#111','--code-fg':'#86efac','--pre-bg':'#0a0a0a','--sys-bg':'#1c1917','--sys-fg':'#fde68a',
+      '--btn-disabled':'#333','--search-bg':'#0a0a0a','--box-shadow':'0 1px 2px rgba(0,0,0,.5),0 4px 14px rgba(0,0,0,.55)',
+      '--modal-mask':'rgba(0,0,0,.75)'
+    }
+  }),
+  crimson: skinPack({
+    name:'暗夜烈焰', tag:'硬核粗框 · 强冲击', group:'dark',
+    swatch:'linear-gradient(135deg,#1c0a0a,#ef4444)', btn:'brutal', wall:'dusk_d', wallSize:'',
+    font:'strong', avatar:'0px', letter:'1px',
+    icons:{ bot:'🔥', attach:'📎', me:'🗡️', settings:'⚠️', chat:'💢', skill:'💥', about:'ℹ️', out:'↩', new:'＋' },
+    vars:{
+      '--bg':'#140808','--bg2':'#221010','--text':'#fecaca','--text2':'#fff1f2','--muted':'#f87171','--muted2':'#fca5a5',
+      '--line':'#3f1a1a','--line2':'#5a2222','--line3':'#2c1212','--accent':'#ef4444','--accent2':'#f87171',
+      '--accent-soft':'#3f1212','--accent-grad':'linear-gradient(135deg,#f87171,#ef4444)',
+      '--accent-shadow':'rgba(239,68,68,.35)','--accent-ring':'rgba(239,68,68,.22)',
+      '--input-bg':'#0e0505','--hover':'#2c1212','--me-hero':'linear-gradient(180deg,#3f1212,#140808)',
+      '--code-bg':'#221010','--code-fg':'#fecaca','--pre-bg':'#0e0505','--sys-bg':'#3f1a1a','--sys-fg':'#fecaca',
+      '--btn-disabled':'#5a2222','--search-bg':'#0e0505','--box-shadow':'0 1px 2px rgba(0,0,0,.4),0 4px 14px rgba(127,29,29,.35)',
+      '--modal-mask':'rgba(20,8,8,.72)'
+    }
+  }),
+  cyber: skinPack({
+    name:'赛博青', tag:'霓虹科技 · 网格底', group:'dark',
+    swatch:'linear-gradient(135deg,#04141c,#06b6d4)', btn:'neon', wall:'cyber_d', wallSize:'',
+    font:'tech', avatar:'8px', letter:'.8px',
+    icons:{ bot:'💠', attach:'🛰️', me:'🥽', settings:'🧬', chat:'📶', skill:'⚡', about:'ℹ️', out:'↩', new:'＋' },
+    vars:{
+      '--bg':'#04141c','--bg2':'#0b2430','--text':'#cffafe','--text2':'#ecfeff','--muted':'#67e8f9','--muted2':'#a5f3fc',
+      '--line':'#134e5a','--line2':'#155e75','--line3':'#0e3340','--accent':'#06b6d4','--accent2':'#22d3ee',
+      '--accent-soft':'#083344','--accent-grad':'linear-gradient(135deg,#22d3ee,#06b6d4)',
+      '--accent-shadow':'rgba(6,182,212,.35)','--accent-ring':'rgba(6,182,212,.22)',
+      '--input-bg':'#021018','--hover':'#0e3340','--me-hero':'linear-gradient(180deg,#083344,#04141c)',
+      '--code-bg':'#0b2430','--code-fg':'#67e8f9','--pre-bg':'#021018','--sys-bg':'#134e5a','--sys-fg':'#cffafe',
+      '--btn-disabled':'#155e75','--search-bg':'#021018','--box-shadow':'0 1px 2px rgba(0,0,0,.4),0 4px 14px rgba(8,145,178,.3)',
+      '--modal-mask':'rgba(2,16,24,.72)'
+    }
+  })
+};
+
+function getThemeId() { return localStorage.getItem('xiami_theme') || 'classic'; }
+function curSkin() { return THEMES[getThemeId()] || THEMES.classic; }
+function skinIcon(key) { return (curSkin().icons || {})[key] || ''; }
+
+function welcomeHtml() {
+  const bot = skinIcon('bot') || '🦐';
+  const sess = curSess();
+  const hired = sess && sess.persona && sess.persona.person_id;
+  if (hired) {
+    const nm = esc(sess.persona.person_name || sess.name || '帮手');
+    return '<div class="chat-welcome"><div class="welcome-avatar" id="welcomeBot">' + bot + '</div><h2>跟 <b>' + nm + '</b> 办事</h2><div class="welcome-sub">直接说要办的事；TA 按经验书问清楚再动手</div></div>';
+  }
+  return '<div class="chat-welcome"><div class="welcome-avatar" id="welcomeBot">' + bot + '</div><h2>家里有人</h2><div class="welcome-sub" onclick="showView(\'showcase\')"><span class="welcome-spark">✨</span>去才艺，看家里谁会</div></div>';
+}
+
+function loadThemeFont(fontKey) {
+  const f = FONTS[fontKey] || FONTS.system;
+  let link = document.getElementById('themeFontLink');
+  if (!link) {
+    link = document.createElement('link');
+    link.id = 'themeFontLink';
+    link.rel = 'stylesheet';
+    document.head.appendChild(link);
+  }
+  link.href = f.google
+    ? ('https://fonts.googleapis.com/css2?family=' + f.google + '&display=swap')
+    : '';
+  if (!f.google) link.removeAttribute('href');
+}
+
+function applySkinIcons() {
+  const ic = curSkin().icons || {};
+  const set = (id, v) => { const el = $(id); if (el && v) el.textContent = v; };
+  set('welcomeBot', ic.bot);
+  set('icMe', ic.me); set('icSetMe', ic.me);
+  set('icSettings', ic.settings);
+  set('icSetAbout', ic.about);
+  set('icSetOut', ic.out);
+  // 列表页脚文案前缀已是 span，保持
+  const meItem = $('mi-me');
+  if (meItem && ic.me) {
+    const span = meItem.querySelector('#icMe');
+    if (span) span.textContent = ic.me;
+  }
+  const setItem = $('mi-settings');
+  if (setItem && ic.settings) {
+    const span = setItem.querySelector('#icSettings');
+    if (span) span.textContent = ic.settings;
+  }
+}
+
+function applyTheme(id, persist) {
+  const t = THEMES[id] || THEMES.classic;
+  const root = document.documentElement;
+  Object.keys(t.vars).forEach(k => root.style.setProperty(k, t.vars[k]));
+  // 按钮外形（整套内置）
+  const btn = BTN_STYLES[t.btn] || BTN_STYLES.soft;
+  Object.keys(btn.vars).forEach(k => root.style.setProperty(k, btn.vars[k]));
+  // 壁纸（整套内置）
+  root.style.setProperty('--chat-wallpaper', WALLS[t.wall] || WALLS.plain);
+  const chat = $('chatView');
+  if (chat) chat.style.backgroundSize = t.wallSize || '';
+  // 字体 / 头像圆角 / 字距
+  const f = FONTS[t.font] || FONTS.system;
+  root.style.setProperty('--font', f.css);
+  root.style.setProperty('--font-display', f.display || f.css);
+  root.style.setProperty('--avatar-radius', t.avatar || '24px');
+  root.style.setProperty('--letter', t.letter || '0');
+  loadThemeFont(t.font);
+  document.body.setAttribute('data-theme', id);
+  document.body.setAttribute('data-tone', t.group);
+  if (persist !== false) {
+    localStorage.setItem('xiami_theme', id);
+    // 清理旧的拆分选项
+    localStorage.removeItem('xiami_wallpaper');
+    localStorage.removeItem('xiami_btn_style');
+    localStorage.removeItem('xiami_btn_locked');
+  }
+  applySkinIcons();
+  // 欢迎页若正在显示，刷新机器人图标（换肤后强制下次 renderChat 重绘）
+  _chatSig = '';
+  try {
+    const sess = (typeof curSess === 'function') ? curSess() : null;
+    if (!sess || !sess.messages || !sess.messages.length) {
+      const inner = $('chatInner');
+      if (inner) inner.innerHTML = welcomeHtml();
+    } else {
+      applySkinIcons();
+    }
+  } catch (e) { applySkinIcons(); }
+}
+
+function setTheme(id) {
+  applyTheme(id, true);
+  renderThemePickers();
+}
+
+function renderThemePickers() {
+  const curT = getThemeId();
+  const light = $('themeLight');
+  const dark = $('themeDark');
+  const card = (k) => {
+    const t = THEMES[k];
+    const b = BTN_STYLES[t.btn] || BTN_STYLES.soft;
+    return `<div class="theme-card${k===curT?' on':''}" onclick="setTheme('${k}')">
+      <div class="theme-swatch" style="background:${t.swatch}">
+        <div class="theme-bot" style="border-radius:${t.avatar}">${t.icons.bot}</div>
+        <span class="theme-btn-demo" style="border-radius:${b.demoRadius}">发送</span>
+        <span class="theme-dot" style="background:${t.vars['--accent']}"></span>
+      </div>
+      <div class="theme-name">${t.name}</div>
+      <div class="theme-btn-tag">${t.tag}</div>
+    </div>`;
+  };
+  if (light) light.innerHTML = Object.keys(THEMES).filter(k => THEMES[k].group === 'light').map(card).join('');
+  if (dark) dark.innerHTML = Object.keys(THEMES).filter(k => THEMES[k].group === 'dark').map(card).join('');
+}
+
+// 云端地址入口已从设置页移除（生产不可改后端地址）；saveBase/exportCookies 相关死代码已清理
+// ═══ 多账号本地隔离（会话/资料/原生凭据均挂当前 email）═══
+
+function currentEmail() {
+  return (localStorage.getItem('xiami_email') || '').trim().toLowerCase();
+}
+function sessionsStorageKey(email) {
+  const em = (email || currentEmail()).trim().toLowerCase();
+  return em ? ('xiami_sessions_' + em) : 'xiami_sessions';
+}
+function profileStorageKey(email) {
+  const em = (email || currentEmail()).trim().toLowerCase();
+  return em ? ('xiami_profile_' + em) : 'xiami_profile';
+}
+function isLoggedIn() {
+  return !!(S.token || localStorage.getItem('xiami_token') || localStorage.getItem('xiami_refresh'));
+}
+/** 旧版全局 key → 当前账号 key（仅目标为空时迁一次） */
+function migrateLegacyLocal(email) {
+  const em = (email || '').trim().toLowerCase();
+  if (!em) return;
+  try {
+    if (!localStorage.getItem('xiami_sessions_' + em)) {
+      const legacy = localStorage.getItem('xiami_sessions');
+      if (legacy) {
+        localStorage.setItem('xiami_sessions_' + em, legacy);
+        localStorage.removeItem('xiami_sessions');
+      }
+    }
+    if (!localStorage.getItem('xiami_profile_' + em)) {
+      const legacy = localStorage.getItem('xiami_profile');
+      if (legacy) {
+        localStorage.setItem('xiami_profile_' + em, legacy);
+        localStorage.removeItem('xiami_profile');
+      }
+    }
+  } catch (e) {}
+}
+function notifyActiveAccount(email) {
+  try {
+    if (window.AndroidBridge && window.AndroidBridge.setActiveAccount) {
+      window.AndroidBridge.setActiveAccount((email || '').trim().toLowerCase());
+    }
+  } catch (e) {}
+}
+/**
+ * 切换本地账号柜：先把当前内存会话落到旧邮箱，再加载新邮箱的 sessions/profile，并通知原生凭据库。
+ * @param {string} newEmail 新账号；空串=登出（清内存、原生 active 置空）
+ * @param {string} [prevEmail] 切换前邮箱（doLogin 在写 xiami_email 前传入）
+ */
+function switchLocalAccount(newEmail, prevEmail) {
+  const neu = (newEmail || '').trim().toLowerCase();
+  const prev = (prevEmail != null ? prevEmail : currentEmail()).trim().toLowerCase();
+  if (S._sessLoaded && prev && prev !== neu) {
+    try { saveSessionsTo(prev); } catch (e) {}
+  }
+  S._sessLoaded = false;
+  S.sessions = {};
+  S.activeSessId = '';
+  if (neu) {
+    migrateLegacyLocal(neu);
+    notifyActiveAccount(neu);
+  } else {
+    notifyActiveAccount('');
+  }
+}
+function saveSessionsTo(email) {
+  try {
+    const snap = {};
+    Object.keys(S.sessions || {}).forEach(sid => {
+      const s = S.sessions[sid];
+      snap[sid] = Object.assign({}, s, {
+        messages: (s.messages || []).map(m => {
+          if (m.img) return Object.assign({}, m, { img: null });
+          return m;
+        }),
+      });
+    });
+    localStorage.setItem(sessionsStorageKey(email), JSON.stringify(snap));
+  } catch (e) {}
+}
+// ═══ 会话状态机（一个才艺 = 一个独立窗口；按账号隔离）═══
+function loadSessions() {
+  // 内存为唯一真相：仅首次从 localStorage 加载；此后不再全量重读覆盖内存（避免未落盘改动丢失）
+  if (S._sessLoaded) return;
+  S._sessLoaded = true;
+  // 未登录不加载任何账号柜（xiami_email 仅用于登录框回填，不能当身份）
+  if (!isLoggedIn()) {
+    S.sessions = {};
+    S.activeSessId = '';
+    return;
+  }
+  const em = currentEmail();
+  if (em) migrateLegacyLocal(em);
+  try { S.sessions = JSON.parse(localStorage.getItem(sessionsStorageKey(em)) || '{}'); }
+  catch (e) { S.sessions = {}; }
+  if (!S.sessions || typeof S.sessions !== 'object') S.sessions = {};
+  // 不自动补默认会话（用户删除后保持彻底删除）；无有效会话时 activeSessId 置空
+  if (!S.activeSessId || !S.sessions[S.activeSessId]) {
+    const keys = Object.keys(S.sessions);
+    S.activeSessId = keys[0] || '';
+  }
+}
+function saveSessions() {
+  try {
+    if (!isLoggedIn()) return;
+    const em = currentEmail();
+    if (!em) return; // 未登录不落盘，避免写到全局串号 key
+    saveSessionsTo(em);
+  } catch (e) {}
+}
+function curSess() {
+  // 首次/内存为空才从 localStorage 加载；否则用内存（appendMsg 刚写入的 img 不被覆盖）
+  if (!S.sessions || typeof S.sessions !== 'object' || Object.keys(S.sessions).length === 0) {
+    loadSessions();
+  }
+  // 不再自动回退默认会话：删除后就是没有（返回 null，聊天显示欢迎页）
+  return S.sessions[S.activeSessId] || null;
+}
+function switchSess(id) {
+  loadSessions();
+  if (!S.sessions[id]) return;
+  S.activeSessId = id;
+  renderConvList();
+  renderChat();
+  showView('chat');
+  const s = S.sessions[id];
+  if (s && (!s.messages || !s.messages.length)) fetchConvMessages(s.id === 'default' ? 'default' : s.id);
+}
+async function newSess() {
+  loadSessions();
+  const mk = (id, name) => ({ id, type:'chat', name, persona:null, messages:[], pinned:false, lastAt:Date.now() });
+  let id = 'sess_' + Date.now(), name = '新对话';
+  if (S.token) {
+    try {
+      const r = await api('/api/v1/conversations', { method:'POST', body: JSON.stringify({ type:'chat', persona:{} }) });
+      const c = r.conversation || {};
+      if (c.conversation_id) { id = c.conversation_id; name = c.title || '新对话'; }
+    } catch (e) {}
+  }
+  S.sessions[id] = mk(id, name);
+  S.sessions[id]._synced = true;
+  S.activeSessId = id;
+  saveSessions();
+  renderConvList();
+  renderChat();
+  showView('chat');
+}
+// ── 云端会话同步（豆包式：会话是云端实体，列表上云、本地孤儿上云、历史按需拉取）──
+async function syncConversations() {
+  if (!S.token) return;
+  try {
+    const r = await api('/api/v1/conversations');
+    const remote = r.conversations || [];
+    loadSessions();
+    const localIds = Object.keys(S.sessions);
+    const remoteIds = {};
+    remote.forEach(c => {
+      const id = c.conversation_id;
+      remoteIds[id] = true;
+      // 云端 default（default__<user_id>）：本地已有 default 才同步状态；用户删除后不自动补回
+      if (id === 'default' || id.indexOf('default__') === 0) {
+        if (S.sessions.default) {
+          S.sessions.default.pinned = !!c.pinned;
+          S.sessions.default.name = c.title || S.sessions.default.name;
+        }
+        return;
+      }
+      if (!S.sessions[id]) {
+        S.sessions[id] = { id, type: c.type||'chat', name: c.title||'新对话', persona: c.persona||null, messages:[], pinned:!!c.pinned, lastAt:(c.updated_at||0)*1000 };
+      } else {
+        const s = S.sessions[id];
+        s.name = c.title || s.name;
+        s.pinned = !!c.pinned;
+        s.type = c.type || s.type;
+        s.lastAt = (c.updated_at||0)*1000;
+        s._synced = true;
+      }
+    });
+    // 本地孤儿（云端没有的非 default 会话）→ 上传上云
+    for (const id of localIds) {
+      if (id === 'default' || remoteIds[id] || !S.sessions[id]) continue;
+      try {
+        const s = S.sessions[id];
+        const rr = await api('/api/v1/conversations', { method:'POST', body: JSON.stringify({ type: s.type||'chat', persona: s.persona||{} }) });
+        const nc = rr.conversation || {};
+        if (nc.conversation_id) {
+          delete S.sessions[id];
+          s.id = nc.conversation_id; s._synced = true;
+          S.sessions[nc.conversation_id] = s;
+          if (S.activeSessId === id) S.activeSessId = nc.conversation_id;
+          // 本地已有消息 → 逐条同步到云端（避免孤儿上云后丢失本地聊天记录）
+          if (s.messages && s.messages.length) {
+            for (const m of s.messages) {
+              if (m.who === 'user') {
+                try { await api('/api/v1/conversations/' + encodeURIComponent(nc.conversation_id) + '/messages', { method:'POST', body: JSON.stringify({ who: m.who, text: m.text }) }); } catch (e) {}
+              }
+            }
+          }
+        }
+      } catch (e) {}
+    }
+    saveSessions();
+    renderConvList();
+    const cur = curSess();
+    if (cur && (!cur.messages || !cur.messages.length)) fetchConvMessages(cur.id === 'default' ? 'default' : cur.id);
+  } catch (e) {}
+}
+// 从云端拉某会话历史（切换/首次打开时）
+async function fetchConvMessages(convId) {
+  if (!S.token) return;
+  if (S.activeSessId === convId) {
+    const inner = $('chatInner');
+    if (inner && (!S.sessions[convId] || !S.sessions[convId].messages || !S.sessions[convId].messages.length)) {
+      inner.innerHTML = '<div class="msg sys">加载历史消息…</div>';
+    }
+  }
+  try {
+    const r = await api('/api/v1/conversations/' + encodeURIComponent(convId) + '/messages');
+    const c = r.conversation || {};
+    loadSessions();
+    const s = S.sessions[convId];
+    if (!s) return;
+    s.messages = (c.messages || []).map(m => ({ who: m.who, text: m.text, img: m.img||null, at: (m.at||0)*1000 }));
+    saveSessions();
+    if (S.activeSessId === convId) { _chatSig = ''; renderChat(); }
+  } catch (e) {
+    if (S.activeSessId === convId) { _chatSig = ''; renderChat(); }
+  }
+}
+// 确保会话已在云端（skill/persona 会话首次发送时上云）；返回带云端 id 的会话
+async function ensureConvSynced(sess) {
+  if (!sess || sess.id === 'default' || sess._synced) return sess;
+  if (!S.token) return sess;
+  try {
+    const r = await api('/api/v1/conversations', { method:'POST', body: JSON.stringify({ type: sess.type || 'chat', persona: sess.persona || {} }) });
+    const c = r.conversation || {};
+    const newId = c.conversation_id;
+    if (newId) {
+      const oldId = sess.id;
+      delete S.sessions[oldId];
+      sess.id = newId; sess._synced = true;
+      if (c.persona) sess.persona = c.persona;
+      if (c.title) sess.name = c.title;
+      S.sessions[newId] = sess;
+      if (S.activeSessId === oldId) S.activeSessId = newId;
+      saveSessions();
+    }
+  } catch (e) {}
+  return sess;
+}
+// ── 会话长按菜单（豆包式：置顶/重命名/清空/删除）──
+let _menuSessId = null;
+function showConvMenu(id) {
+  const s = S.sessions[id];
+  if (!s) return;
+  _menuSessId = id;
+  const m = $('convMenu'); if (!m) return;
+  const t = $('convMenuTitle'); if (t) t.textContent = s.name || '对话';
+  const p = $('convMenuPin'); if (p) p.textContent = s.pinned ? '取消置顶' : '置顶';
+  m.classList.add('show');
+}
+function closeConvMenu() { const m = $('convMenu'); if (m) m.classList.remove('show'); _menuSessId = null; }
+function convMenuAction(action) {
+  const id = _menuSessId; _menuSessId = null;
+  closeConvMenu();
+  if (!id || !S.sessions[id]) return;
+  if (action === 'pin') {
+    const s = S.sessions[id];
+    s.pinned = !s.pinned;
+    if (S.token) { try { api('/api/v1/conversations/' + encodeURIComponent(id), { method:'PUT', body: JSON.stringify({ pinned: s.pinned }) }); } catch(e){} }
+    saveSessions(); renderConvList();
+  } else if (action === 'rename') {
+    openRename(id);
+  } else if (action === 'clear') {
+    openClear(id);
+  } else if (action === 'delete') {
+    openDel(id);
+  }
+}
+// ── 重命名（原生输入弹层替代 prompt：Android WebView 默认不支持 prompt）──
+let _opSessId = null;
+function openRename(id) {
+  const s = S.sessions[id]; if (!s) return;
+  _opSessId = id;
+  const inp = $('renameInput'); if (inp) inp.value = s.name || '';
+  const m = $('renameModal'); if (m) m.classList.add('show');
+  setTimeout(() => { try { if (inp) inp.focus(); } catch (e) {} }, 80);
+}
+function closeRename() { const m = $('renameModal'); if (m) m.classList.remove('show'); _opSessId = null; }
+function doRename() {
+  const id = _opSessId; _opSessId = null;
+  closeRename();
+  if (!id || !S.sessions[id]) return;
+  const inp = $('renameInput');
+  const name = ((inp && inp.value) || '').trim().slice(0, 40);
+  if (!name) return;
+  S.sessions[id].name = name;
+  if (S.token) { try { api('/api/v1/conversations/' + encodeURIComponent(id), { method:'PUT', body: JSON.stringify({ title: name }) }); } catch(e){} }
+  saveSessions(); renderConvList(); renderChat();
+}
+// ── 删除确认（原生确认弹层替代 confirm）──
+function openDel(id) {
+  const s = S.sessions[id]; if (!s) return;
+  _opSessId = id;
+  const n = $('delModalName'); if (n) n.textContent = s.name || '对话';
+  const m = $('delModal'); if (m) m.classList.add('show');
+}
+function closeDel() { const m = $('delModal'); if (m) m.classList.remove('show'); _opSessId = null; }
+function doDel() {
+  const id = _opSessId; _opSessId = null;
+  closeDel();
+  delSess(id);
+}
+// ── 清空对话（保留会话与 persona 绑定，只清消息；对 chat / hire 才艺会话通用）──
+function openClear(id) {
+  const s = S.sessions[id]; if (!s) return;
+  _opSessId = id;
+  const n = $('clearModalName'); if (n) n.textContent = s.name || '对话';
+  const m = $('clearModal'); if (m) m.classList.add('show');
+}
+function closeClear() { const m = $('clearModal'); if (m) m.classList.remove('show'); _opSessId = null; }
+function doClear() {
+  const id = _opSessId; _opSessId = null;
+  closeClear();
+  const s = S.sessions[id];
+  if (!s) return;
+  // 默认会话云端 key 是 default__<user_id>，其余会话本地 id 即云端 id
+  const cloudId = (id === 'default') ? ('default__' + (S.userId || '')) : id;
+  if (S.token) {
+    try { api('/api/v1/conversations/' + encodeURIComponent(cloudId) + '/clear', { method:'POST', body:'{}' }); } catch (e) {}
+  }
+  s.messages = [];
+  s.lastAt = Date.now();
+  saveSessions();
+  if (S.activeSessId === id) { renderChat(); scrollChat(); }
+}
+function renderConvList() {
+  // 内存已有会话则直接用（appendMsg 刚写入的 img 不被 localStorage 覆盖）
+  if (!S.sessions || typeof S.sessions !== 'object' || Object.keys(S.sessions).length === 0) {
+    loadSessions();
+  }
+  const box = $('convList');
+  if (!box) return;
+  const kw = ((($('lvSearch') || {}).value) || '').trim().toLowerCase();
+  // 置顶优先，再按最近更新倒序（豆包式）
+  const all = Object.values(S.sessions).sort((a,b) => ((b.pinned||0)-(a.pinned||0)) || ((b.lastAt||0)-(a.lastAt||0)));
+  const items = all.filter(s => !kw || String(s.name || '').toLowerCase().indexOf(kw) >= 0);
+  // 空态：无任何会话 → 居中引导页（豆包式，不再叠「最近对话」标题 + 「暂无对话」文字）
+  if (!all.length) {
+    box.innerHTML = '<div class="conv-empty">'
+      + '<div class="ce-ico">' + (skinIcon('chat') || '💬') + '</div>'
+      + '<div class="ce-title">暂无对话</div>'
+      + '<div class="ce-sub">开始一段新对话，记录你的每一次灵感</div>'
+      + '<button class="ce-btn" onclick="newSess()">＋ 新对话</button>'
+      + '</div>';
+    return;
+  }
+  // 搜索无结果（有会话但没搜到）→ 独立提示，与「暂无对话」区分
+  if (kw && !items.length) {
+    box.innerHTML = '<div class="conv-empty">'
+      + '<div class="ce-ico">🔍</div>'
+      + '<div class="ce-title">未找到相关对话</div>'
+      + '<div class="ce-sub">换个关键词试试吧</div>'
+      + '</div>';
+    return;
+  }
+  let html = '<div class="conv-head">最近对话</div>';
+  items.forEach(s => {
+    const active = (s.id === S.activeSessId) ? ' active' : '';
+    // 删除走长按菜单（豆包式）；点会话进入对话
+    html += `<div class="conv-item${active}" data-sess="${s.id}" onclick="switchSess('${s.id}')" oncontextmenu="event.preventDefault();showConvMenu('${s.id}')">
+      <div class="conv-avatar">${s.type === 'skill' ? (skinIcon('skill')||'✨') : (skinIcon('chat')||'💬')}</div>
+      <div class="cn">${(s.pinned ? '📌 ' : '') + esc(s.name)}</div>
+      <div class="conv-time">${fmtRelTime(s.lastAt)}</div>
+    </div>`;
+  });
+  box.innerHTML = html;
+}
+// 相对时间（豆包式：刚刚 / N分钟前 / N小时前 / 月日）
+function fmtRelTime(ts) {
+  try {
+    const d = Date.now() - (ts || 0);
+    if (d < 60000) return '刚刚';
+    if (d < 3600000) return Math.floor(d / 60000) + ' 分钟前';
+    if (d < 86400000) return Math.floor(d / 3600000) + ' 小时前';
+    const dt = new Date(ts), now = new Date();
+    if (dt.getFullYear() === now.getFullYear()) return (dt.getMonth()+1) + '月' + dt.getDate() + '日';
+    return dt.getFullYear() + '/' + (dt.getMonth()+1) + '/' + dt.getDate();
+  } catch (e) { return ''; }
+}
+// 删除会话（含默认对话：删了就彻底删除，不自动重建）
+function delSess(id) {
+  loadSessions();
+  if (!S.sessions[id]) return;
+  const isDefault = (id === 'default' || String(id).indexOf('default__') === 0);
+  // 云端删除：默认会话在云端 key 是 default__<user_id> 且云端禁止 DELETE，
+  // 改为清空其消息（等效删除内容）；普通会话直接 DELETE
+  const cloudId = (id === 'default') ? ('default__' + (S.userId || '')) : id;
+  if (S.token) {
+    try {
+      if (isDefault) api('/api/v1/conversations/' + encodeURIComponent(cloudId) + '/clear', { method:'POST', body:'{}' });
+      else api('/api/v1/conversations/' + encodeURIComponent(cloudId), { method:'DELETE' });
+    } catch (e) {}
+  }
+  delete S.sessions[id];
+  // 不自动重建任何会话；若删的是当前会话则切到剩余第一个（无则空，聊天显示欢迎页）
+  if (S.activeSessId === id) {
+    const rest = Object.keys(S.sessions);
+    S.activeSessId = rest[0] || '';
+  }
+  saveSessions();
+  renderConvList();
+  renderChat();
+  scrollChat();
+}
+// ── 会话项长按菜单（豆包式：置顶/重命名/删除；不再是左滑删除）──
+let _pressTimer = null;
+function bindConvLongPress() {
+  const list = $('convList');
+  if (!list || list.__swipeBound) return;
+  list.__swipeBound = true;
+  list.addEventListener('touchstart', e => {
+    const item = e.target.closest ? e.target.closest('.conv-item') : null;
+    if (!item) return;
+    if (_pressTimer) { clearTimeout(_pressTimer); _pressTimer = null; }
+    _pressTimer = setTimeout(() => {
+      _pressTimer = null;
+      showConvMenu(item.dataset.sess);
+    }, 600);
+  }, { passive: true });
+  list.addEventListener('touchmove', () => {
+    if (_pressTimer) { clearTimeout(_pressTimer); _pressTimer = null; }
+  }, { passive: true });
+  list.addEventListener('touchend', () => {
+    if (_pressTimer) { clearTimeout(_pressTimer); _pressTimer = null; }
+  }, { passive: true });
+}
+
+// ═══ 豆包式：左右滑动切换「对话列表 ↔ 对话」═══
+let _vsX = 0, _vsY = 0, _vsLock = false;
+function bindViewSwipe() {
+  const main = document.querySelector('.main');
+  if (!main || main.__vswBound) return;
+  main.__vswBound = true;
+  main.addEventListener('touchstart', e => {
+    _vsX = e.touches[0].clientX; _vsY = e.touches[0].clientY; _vsLock = false;
+  }, { passive: true });
+  main.addEventListener('touchmove', e => {
+    if (_vsLock) return;
+    const dx = e.touches[0].clientX - _vsX;
+    const dy = e.touches[0].clientY - _vsY;
+    // 横向主导且位移足够 → 页面切换（对话列表向左滑进对话；对话向右滑回列表）
+    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.2) {
+      if (S.view === 'list' && dx < 0) { _vsLock = true; if (e.cancelable) e.preventDefault(); showView('chat'); }
+      else if (S.view === 'chat' && dx > 0) { _vsLock = true; if (e.cancelable) e.preventDefault(); showView('list'); }
+    }
+  }, { passive: false });
+  main.addEventListener('touchend', () => { _vsLock = false; }, { passive: true });
+}
+// 图片 base64 → 正确 MIME 的 data URI（PNG/JPEG/GIF/WebP，不再硬编码 png）
+function imgDataUri(b64) {
+  if (!b64) return '';
+  if (b64.indexOf('data:') === 0) return b64;
+  if (/^\/9j/.test(b64)) return 'data:image/jpeg;base64,' + b64;
+  if (/^iVBORw0KGgo/.test(b64)) return 'data:image/png;base64,' + b64;
+  if (/^R0lGOD/.test(b64)) return 'data:image/gif;base64,' + b64;
+  if (/^UklGR/.test(b64)) return 'data:image/webp;base64,' + b64;
+  return 'data:image/png;base64,' + b64;
+}
+let _chatSig = '';
+function renderChat() {
+  const sess = curSess();
+  const inner = $('chatInner');
+  // 无变化不重绘（refreshTask 高频轮询时避免每次全量 innerHTML 重建）
+  const sig = sess ? (sess.id + '#' + ((sess.messages || []).length)) : 'none';
+  if (sig === _chatSig) { scrollChat(); return; }
+  _chatSig = sig;
+  if (!sess || !sess.messages || !sess.messages.length) {
+    inner.innerHTML = welcomeHtml();
+  } else {
+    inner.innerHTML = sess.messages.map(m => {
+      // image 可能已是完整 data URI（云端直传）也可能是纯 base64，按实际格式处理
+      const imgSrc = imgDataUri(m.img);
+      const imgHtml = m.img ? `<div class="msg-img"><img src="${imgSrc}" alt="验证码" style="max-width:220px;border-radius:8px;border:1px solid #ddd"></div>` : '';
+      const body = (m.who === 'bot')
+        ? '<div class="md">' + md(m.text) + '</div>' + copyBtn(m.text)
+        : esc(m.text);
+      return `<div class="msg ${m.who}">${body}${imgHtml}</div>`;
+    }).join('');
+  }
+  scrollChat();
+}
+function copyBtn(text) {
+  const safe = JSON.stringify(String(text == null ? '' : text));
+  return `<div class="msg-copy" onclick="copyText(${safe})">复制</div>`;
+}
+function copyText(text) {
+  try {
+    if (navigator.clipboard) { navigator.clipboard.writeText(text); }
+    else {
+      const ta = document.createElement('textarea'); ta.value = text;
+      document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();
+    }
+  } catch (e) {}
+}
+// ── 轻量 markdown 渲染（豆包式结构化：标题/加粗/列表/表格/代码）──
+function md(raw) {
+  let s = String(raw == null ? '' : raw);
+  // 代码块先从原文提取并转义（避免 esc 双重转义）
+  const blocks = [];
+  s = s.replace(/```[\s\S]*?```/g, m => {
+    const code = m.replace(/^```\w*\n?/, '').replace(/\n?```$/, '');
+    blocks.push('<pre><code>' + code.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</code></pre>');
+    return '\u0001' + (blocks.length - 1) + '\u0001';
+  });
+  s = esc(s);
+  const inline = (x) => x
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+  const lines = s.split('\n');
+  let html = '', list = '', tbl = '';
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    const cb = line.match(/^\u0001(\d+)\u0001$/);
+    if (cb) { html += (list ? '</ul>' : '') + (tbl ? '</table>' : '') + blocks[+cb[1]]; list = ''; tbl = ''; continue; }
+    const h = line.match(/^(#{1,4})\s+(.*)/);
+    if (h) { html += (list ? '</ul>' : '') + (tbl ? '</table>' : '') + '<h' + h[1].length + '>' + inline(h[2]) + '</h' + h[1].length + '>'; list = ''; tbl = ''; continue; }
+    if (/^---+$/.test(line)) { html += (list ? '</ul>' : '') + (tbl ? '</table>' : '') + '<hr>'; list = ''; tbl = ''; continue; }
+    if (/^\|/.test(line) && /\|$/.test(line)) {
+      const cells = line.replace(/^\||\|$/g, '').split('|').map(c => c.trim());
+      const isSep = cells.every(c => /^:?-+:?$/.test(c));
+      if (!tbl) { html += '<table>'; tbl = 'thead'; }
+      if (isSep) { tbl = 'tbody'; continue; }
+      const tag = (tbl === 'thead') ? 'th' : 'td';
+      html += '<tr>' + cells.map(c => '<' + tag + '>' + inline(c) + '</' + tag + '>').join('') + '</tr>';
+      continue;
+    }
+    if (tbl) { html += '</table>'; tbl = ''; }
+    const ul = line.match(/^[-*]\s+(.*)/);
+    if (ul) { if (list !== 'ul') { html += (list ? '</ul>' : '') + '<ul>'; list = 'ul'; } html += '<li>' + inline(ul[1]) + '</li>'; continue; }
+    const ol = line.match(/^\d+\.\s+(.*)/);
+    if (ol) { if (list !== 'ol') { html += (list ? '</ol>' : '') + '<ol>'; list = 'ol'; } html += '<li>' + inline(ol[1]) + '</li>'; continue; }
+    if (list) { html += '</' + (list === 'ul' ? 'ul' : 'ol') + '>'; list = ''; }
+    if (line === '') { html += '<div class="md-gap"></div>'; continue; }
+    html += '<p>' + inline(line) + '</p>';
+  }
+  if (list) html += '</' + (list === 'ul' ? 'ul' : 'ol') + '>';
+  if (tbl) html += '</table>';
+  return html;
+}
+// 🌐 浏览器入口：授权中心「内置浏览器」+ 登录/验证码提示时调用。
+// 原生 AndroidBridge.showBrowserCurrent() 切到浏览器（不重载当前页）；
+// 兼容无原生 bridge 的预览环境。
+function showBrowserBtn() {
+  if (window.AndroidBridge && window.AndroidBridge.showBrowserCurrent) {
+    try { window.AndroidBridge.showBrowserCurrent(); return; } catch (e) {}
+  }
+  if (window.AndroidBridge && window.AndroidBridge.showBrowser) {
+    try { window.AndroidBridge.showBrowser(''); } catch (e) {}
+  }
+}
+
+// ═══ 登录 ═══
+async function doLogin(isRegister) {
+  const base = getBase(); if (!base) return alert('请填云端地址');
+  S.base = base;
+  const email = $('email').value.trim(), pass = $('pass').value;
+  if (!email || !pass) { $('connMsg').textContent = '❌ 请填写邮箱和密码'; return; }
+  $('loginBtn').disabled = true; $('regBtn').disabled = true;
+  $('connMsg').textContent = isRegister ? '注册中…' : '登录中…';
+  try {
+    const body = { email, password: pass };
+    if (isRegister) Object.assign(body, { password_confirm: pass, nickname: email.split('@')[0] });
+    const r = await api('/api/v1/auth/' + (isRegister ? 'register' : 'login'), { method:'POST', body: JSON.stringify(body) });
+    if (r && r.ok === false) throw new Error(r.detail || '操作失败');
+    const prevEmail = currentEmail();
+    const neu = email.trim().toLowerCase();
+    // 先切本地柜（落盘旧账号会话 → 载入新账号），再写登录态
+    switchLocalAccount(neu, prevEmail);
+    S.token = r.access_token;
+    S.userId = r.user_id || email;      // 新主键 user_id（UUID）
+    S.deviceId = email;                  // 设备通道/业务隔离键保持 email（云端 master/bridge 按 email 路由）
+    localStorage.setItem('xiami_base', base);
+    localStorage.setItem('xiami_token', S.token);
+    localStorage.setItem('xiami_refresh', r.refresh_token || '');
+    localStorage.setItem('xiami_email', email);
+    loadSessions();
+    renderConvList();
+    $('connModal').classList.remove('show');
+    setConn('设备在线');
+    showBrowserBtn();
+    loadMe(); connectWS(); syncConversations();
+    showView('chat');   // 登录后进入会话列表首页
+    $('connMsg').textContent = '';
+  } catch (e) { $('connMsg').textContent = '❌ ' + e.message; }
+  finally { $('loginBtn').disabled = false; $('regBtn').disabled = false; }
+}
+
+function setConn(txt) {
+  const el = $('connInfo');
+  if (!el) return;
+  el.textContent = '';
+  el.classList.remove('online', 'offline', 'guest');
+  // 绿=在线；红=断开/失败；灰=未登录/验证中
+  let cls = 'guest';
+  if (/设备在线|在线/.test(txt) && !/离线|断开|失败/.test(txt)) cls = 'online';
+  else if (/⚠️|离线|断开|❌|失败/.test(txt)) cls = 'offline';
+  el.classList.add(cls);
+  el.title = txt || (cls === 'online' ? '设备在线' : cls === 'offline' ? '设备断开' : '未登录');
+}
+
+function doLogout() {
+  // 尽力吊销服务端 refresh token，再清本地登录态；本机按账号归档的 sessions/profile/凭据保留，供下次同账号登录恢复
+  const rt = localStorage.getItem('xiami_refresh');
+  if (rt) { try { fetch(S.base + '/api/v1/auth/logout', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ refresh_token: rt }) }); } catch(e){} }
+  closeAccount();
+  const prev = currentEmail();
+  if (S._sessLoaded && prev) { try { saveSessionsTo(prev); } catch (e) {} }
+  switchLocalAccount('', prev); // 原生 active 置空，内存会话清空（不串到下一账号）
+  S.token=''; S.userId=''; S.deviceId=''; S.curSkill=null;
+  if (S.ws) { try { S.ws.close(); } catch(e){} S.ws = null; }
+  if (S.timer) clearInterval(S.timer); S.timer=null;
+  localStorage.removeItem('xiami_token');
+  localStorage.removeItem('xiami_refresh');
+  // 保留 xiami_email 仅用于登录框回填；本地数据已按账号分柜，不再当作「当前在线身份」
+  $('connModal').classList.add('show');
+  setConn('未登录');
+  $('chatInner').innerHTML = welcomeHtml();
+  _chatSig = '';
+  renderConvList();
+}
+
+// ═══ 聊天（多窗口：appendMsg 写入当前会话并持久化）═══
+function appendMsg(who, text, img) {
+  loadSessions();
+  const sess = curSess();
+  if (!sess) return;   // 无当前会话（可能全删空）时跳过，避免异常
+  if (!sess.messages) sess.messages = [];
+  // 去重：与最后一条完全相同（内容+角色）则跳过，避免轮询/历史重复堆积
+  const last = sess.messages[sess.messages.length - 1];
+  if (last && last.who === who && last.text === text && !img) return;
+  // 去重：若列表中已存在完全相同的 bot 消息且时间很近（<3分钟），也跳过
+  if (who === 'bot' && !img && sess.messages.some(m => m.who === 'bot' && m.text === text && (Date.now() - (m.at || 0)) < 180000)) return;
+  sess.messages.push({ who, text, img: img || null, at: Date.now() });
+  // 会话自动命名（豆包式）：第一条用户消息作为标题，避免一列全是「新对话」
+  if (who === 'user' && !sess._titled) {
+    const t = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
+    if (t) sess.name = t.slice(0, 12);
+    sess._titled = true;
+  }
+  sess.lastAt = Date.now();
+  saveSessions();
+  renderChat();
+  renderConvList();
+}
+function scrollChat() { const c=$('chatScroll'); if (c) c.scrollTop = c.scrollHeight; }
+
+
+function syncSendBtn() {
+  const btn = $('sendBtn');
+  const msg = $('msg');
+  if (!btn || !msg) return;
+  btn.disabled = !(msg.value || '').trim();
+}
+
+async function sendMsg() {
+  const msg = $('msg').value.trim(); if (!msg) return;
+  if (!S.token) { appendMsg('bot', '⚠️ 请先登录'); return; }
+  appendMsg('user', msg);
+  $('msg').value = '';
+  syncSendBtn();
+  // skill ask_user 等待中：把回复当「回答」送出去（WS 在线走 WS；WS 断线走 HTTP 带 ask_id）
+  if (S.waitingAsk) {
+    const askId = S.askId || '';
+    S.waitingAsk = false;
+    if (S.ws && S.ws.readyState === 1) {
+      try { S.ws.send(JSON.stringify({ type:'user_input', data:{ value: msg, ask_id: askId } })); } catch (e) {}
+    } else {
+      // WS 断开：回答走 HTTP 带 ask_id，云端仍能喂给等待中的任务（问题①兜底）
+      const sess = curSess();
+      try {
+        await api('/api/v1/chat', { method:'POST', body: JSON.stringify({
+          message: msg, session_id: sess ? sess.id : 'default', ask_id: askId }) });
+      } catch (e) { appendMsg('bot', '⚠️ ' + e.message); }
+    }
+    return;
+  }
+  // 当前会话同步到云端；消息只带原文 + session_id（人设由云端读会话 persona，不要塞进 message）
+  let cur = curSess();
+  if (!cur) { await newSess(); cur = curSess(); }   // 全部会话被删空时自动新建一个会话再发送
+  const sess = await ensureConvSynced(cur);
+  const payload = { message: msg, session_id: sess ? sess.id : 'default' };
+  try {
+    const r = await api('/api/v1/chat', { method:'POST', body: JSON.stringify(payload) });
+    if (r.reply) appendMsg('bot', r.reply);
+    // 铁律（2026-08-16）：不再 refreshTask 轮询拉结果——靠云端 task_update WS 推送。
+    // WS 没推 = WS 链路有问题，直接暴露。
+  } catch (e) { appendMsg('bot', '⚠️ ' + e.message); }
+}
+
+// 渲染一条 task（WS 推送 task_update 与轮询 refreshTask 共用）
+function renderTask(t) {
+  if (!t) return;
+  if (t.reply) {
+    const sess = curSess();
+    // 只把属于「当前会话」的回复写进来（云端 task 已带 conversation_id），
+    // 杜绝上一次对话的旧回复污染新会话；S.lastReply 兜底跨会话去重
+    const convMatch = !t.conversation_id || (sess && t.conversation_id === sess.id);
+    const dup = (sess && sess.messages) ? sess.messages.some(m => m.who === 'bot' && m.text === t.reply) : false;
+    if (convMatch && !dup && t.reply !== S.lastReply) { appendMsg('bot', t.reply); S.lastReply = t.reply; }
+  }
+  // ask_user 提问防重：WS 推送(handleCmd)与轮询这里都会到，用 askGate 内容比对只渲染一次
+  if (t.ask && t.status === 'waiting_user') {
+    if (t.ask.ask_id) S.askId = t.ask.ask_id;   // 记住当前等待的提问编号，回答时带上
+    const askKey = JSON.stringify(t.ask);
+    if (S.askGate !== askKey) {
+      S.askGate = askKey;
+      appendMsg('bot', '❓ ' + (t.ask.question||'请回复'));
+      const opts = Array.isArray(t.ask.options) ? t.ask.options.filter(x => String(x).trim()) : [];
+      if (opts.length > 0) renderAskOptions(opts);
+    }
+  }
+}
+
+// 渲染 ask_user 建议选项按钮（点选代替打字）
+function renderAskOptions(opts) {
+  const bar = $('askOptionsBar');
+  if (!bar) return;
+  bar.innerHTML = (opts || []).map((x, i) =>
+    '<button class="ask-opt" data-i="' + i + '" onclick="pickOption(' + i + ')">' + esc(String(x)) + '</button>'
+  ).join('');
+  bar.style.display = 'flex';
+}
+function pickOption(i) {
+  const bar = $('askOptionsBar');
+  const btns = bar ? bar.querySelectorAll('.ask-opt') : [];
+  const val = btns[i] ? btns[i].textContent : '';
+  if (!val) return;
+  if (bar) { bar.innerHTML = ''; bar.style.display = 'none'; }
+  sendAnswer(val);
+}
+// 把点选/输入的值当 ask_user 回答送出去（复用 sendMsg 的 waitingAsk 分支）
+function sendAnswer(value) {
+  const msg = String(value == null ? '' : value).trim();
+  if (!msg || !S.waitingAsk) return;
+  const askId = S.askId || '';
+  S.waitingAsk = false;
+  appendMsg('user', msg);
+  if (S.ws && S.ws.readyState === 1) {
+    try { S.ws.send(JSON.stringify({ type:'user_input', data:{ value: msg, ask_id: askId } })); } catch (e) {}
+  } else {
+    const sess = curSess();
+    try {
+      api('/api/v1/chat', { method:'POST', body: JSON.stringify({
+        message: msg, session_id: sess ? sess.id : 'default', ask_id: askId }) });
+    } catch (e) {}
+  }
+}
+async function refreshTask() {
+  if (!S.token) return;
+  try {
+    const r = await api('/api/v1/task');
+    renderTask(r.task);
+  } catch (e) {}
+}
+function stopTaskPoll() { if (S.timer) { clearInterval(S.timer); S.timer = null; } }
+function startTaskPoll() { if (!S.timer) S.timer = setInterval(refreshTask, 1500); }
+
+// ═══ 设备执行通道（WS + AndroidBridge）═══
+function wsUrl() { return S.base.replace(/^http/, 'ws') + '/api/v1/ws?device_id=' + encodeURIComponent(S.deviceId) + '&token=' + encodeURIComponent(S.token); }
+let _wsHb = null, _wsRetry = 0;
+function stopWsHeartbeat() { if (_wsHb) { clearInterval(_wsHb); _wsHb = null; } }
+function startWsHeartbeat(ws) {
+  stopWsHeartbeat();
+  _wsHb = setInterval(() => {
+    try { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type:'ping' })); } catch (e) {}
+  }, 25000);
+}
+function connectWS() {
+  if (!S.token || !S.deviceId) return;
+  if (S.ws && (S.ws.readyState === 0 || S.ws.readyState === 1)) return;
+  try {
+    const ws = new WebSocket(wsUrl());
+    S.ws = ws;
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ type:'session_ready', data:{ device_id: S.deviceId } }));
+      startWsHeartbeat(ws);
+      setConn('设备在线');
+      _wsRetry = 0;
+      stopTaskPoll();
+    };
+    ws.onclose = (ev) => {
+      stopWsHeartbeat();
+      S.ws = null;
+      _wsRetry = Math.min(_wsRetry + 1, 6);
+      const delay = Math.min(3000 * Math.pow(2, _wsRetry - 1), 30000);
+      setConn('⚠️ 设备断开，' + Math.round(delay / 1000) + '秒后重连…');
+      if (_wsRetry >= 3) {
+        appendMsg('sys', '⚠️ 与云端的实时连接已断开，正在重连…消息可能延迟送达。');
+      }
+      setTimeout(connectWS, delay);
+    };
+    ws.onerror = () => {};
+    ws.onmessage = ev => { try { handleCmd(JSON.parse(ev.data)); } catch (e) {} };
+  } catch (e) { setConn('❌ WS 失败'); }
+}
+function sendResult(data) { if (S.ws && S.ws.readyState === 1) S.ws.send(JSON.stringify({ type:'result', data })); }
+
+// [第1条] skill 执行通道：skill_request -> 手机直连平台 -> skill_result
+// 临时桥接：JS fetch 直发请求（第 6 条换原生 OkHttp + 本地凭据库）
+function sendSkillResult(reqId, ok, status, headers, body, error) {
+  if (!S.ws || S.ws.readyState !== 1) return;
+  try {
+    S.ws.send(JSON.stringify({ type:'skill_result', req_id: reqId, ok: !!ok,
+      status: status || 0, headers: headers || {}, body: body || '', error: error || '' }));
+  } catch (e) {}
+}
+// 原生 SkillExecutor 回执（第 6 条）：收 skill_result → WS 回传云端
+window.__skillResult = function(reqId, res) {
+  const r = (res && typeof res === 'object') ? res
+    : (() => { try { return JSON.parse(res); } catch(e) { return { ok:false, status:0, headers:{}, body:'', error:'bad result' }; } })();
+  sendSkillResult(reqId, r.ok, r.status, r.headers || {}, r.body || '', r.error || '');
+};
+async function handleSkillRequest(msg) {
+  const reqId = msg.req_id || '';
+  // 第 6 条：优先原生 SkillExecutor（OkHttp 直连 + 本地凭据库 + 签名）
+  if (window.AndroidBridge && window.AndroidBridge.executeSkill) {
+    try { window.AndroidBridge.executeSkill(reqId, JSON.stringify(msg)); return; } catch (e) {}
+  }
+  // 降级：JS fetch（无原生 bridge 的浏览器预览环境）
+  const req = msg.request || {};
+  const fail = (err) => sendSkillResult(reqId, false, 0, {}, '', err || '手机执行失败');
+  try {
+    const headers = Object.assign({}, req.headers || {});
+    const init = { method: String(req.method || 'GET').toUpperCase(), headers };
+    const body = req.body;
+    if (body !== undefined && body !== null && String(body).length > 0) {
+      init.body = (typeof body === 'string') ? body : JSON.stringify(body);
+      if (!headers['Content-Type']) headers['Content-Type'] = 'application/json';
+    }
+    const r = await fetch(req.url, init);
+    const text = await r.text();
+    const respHeaders = {};
+    r.headers.forEach((v, k) => { respHeaders[k] = v; });
+    sendSkillResult(reqId, r.ok, r.status, respHeaders, text, '');
+  } catch (e) { fail(e && e.message || e); }
+}
+
+let cbSeq = 0; const PENDING = {};
+function execCmd(cmd, params) {
+  return new Promise(res => {
+    const id = 'cb' + (++cbSeq); PENDING[id] = res;
+    window.AndroidBridge.executeCmd(cmd, JSON.stringify(params || {}), id);
+  });
+}
+window.__cmdResult = function(id, json) {
+  const p = PENDING[id];
+  if (p) { try { p(JSON.parse(json)); } catch (e) { p({ ok:false }); } delete PENDING[id]; }
+};
+async function handleCmd(msg) {
+  // 第 1 条：skill_request 请求蓝图（云端下发 -> 手机直连平台 -> 回 skill_result）
+  if (msg.type === 'skill_request') { await handleSkillRequest(msg); return; }
+  // 云端心跳回执：忽略即可
+  if (msg.cmd === 'pong') return;
+  const cmd = msg.cmd, params = msg.params || {};
+  // 任务状态实时推送（云端处理完即推，代替轮询）；只读渲染，不回执
+  if (cmd === 'task_update') { renderTask(params || {}); return; }
+  // 云端提问已结束（成功/超时/取消）→ 退出「等回答」态，之后客户消息走普通对话，不再被当「回答」送走
+  if (cmd === 'ask_done') {
+    S.waitingAsk = false;
+    S.askId = '';
+    const bar = $('askOptionsBar');
+    if (bar) { bar.innerHTML = ''; bar.style.display = 'none'; }
+    return;
+  }
+  if (cmd === 'ask_user') {
+    S.waitingAsk = true;
+    if (params.ask_id) S.askId = params.ask_id;   // 记住提问编号，回答时带上
+    // 与 renderTask 共用 askGate：key 结构一致（question+ask_id）避免重复渲染
+    S.askGate = JSON.stringify({ question: String(params.question||''), ask_id: String(params.ask_id||'') });
+    // 需要看页面/验证码时：切到内置浏览器、← 回聊天回复
+    const q = String(params.question||'请配合（登录/验证码）');
+    const needLook = /验证码|图片|截图|看.*页|在屏幕上|人工/i.test(q);
+    const img = params.image || null;
+    const opts = Array.isArray(params.options) ? params.options.filter(x => String(x).trim()) : [];
+    if (img) {
+      // 云端推了验证码图片 → 显示在聊天 + 另存一份到手机「Download」目录（保证一定能看到）
+      try { if (window.AndroidBridge) window.AndroidBridge.saveCaptchaImage(img); } catch (e) {}
+      appendMsg('bot', '❓ ' + q + '\n（请查看上方验证码图片，在下方输入框输入图片上的字符；或打开手机「文件管理 → 下载 → Xiami」目录查看最新验证码图片）', img);
+    } else {
+      appendMsg('bot', '❓ ' + q + '\n（' + (needLook ? '已自动打开页面，请查看后回复' : '请在下方输入框回复') + '）');
+    }
+    if (opts.length > 0) renderAskOptions(opts);
+    if (needLook) showBrowserBtn();
+    sendResult({ ok:true }); return;
+  }
+  // navigate：把 URL/微信UA 等完整下发原生执行（切浏览器界面 + loadUrl + 回执），
+  // 避免只 showBrowser('') 丢掉 url/ua 导致 glyy 登录页无法加载
+  if (cmd === 'navigate') {
+    let res = { ok: true };
+    try { res = await execCmd('navigate', params); } catch (e) { res = { ok: false, error: String(e) }; }
+    showBrowserBtn();
+    sendResult(res);
+    return;
+  }
+  // 导出登录态（glyy Bearer token）→ 原生读浏览器 localStorage/cookie 存手机凭据库
+  if (cmd === 'export_token') {
+    let res = { ok: false, error: 'no bridge' };
+    try { res = await execCmd('export_token', params); } catch (e) { res = { ok: false, error: String(e) }; }
+    sendResult(res);
+    return;
+  }
+  // 第 5 条：支付跳转 → 系统浏览器第三方收银台（App 内零收款）
+  if (cmd === 'open_external') {
+    const payUrl = String((params && params.url) || '');
+    if (payUrl && window.AndroidBridge && window.AndroidBridge.openExternal) {
+      window.AndroidBridge.openExternal(payUrl);
+      appendMsg('bot', '🔗 已在系统浏览器打开支付页面，请在浏览器完成支付，支付完成后回到本 App 回复我。');
+    }
+    sendResult({ ok:true }); return;
+  }
+  // 未知指令：直接失败（业务已无浏览器遥控指令，只剩登录/支付）
+  sendResult({ ok:false, error: 'unknown cmd:' + cmd });
+}
+
+// ═══ 市场 ═══
+function skillBadge(s) {
+  if (s.can_run) return '<span class="badge done">✅可执行</span>';
+  if (s.status === 'draft') return '<span class="badge waiting">🧪制作中</span>';
+  return '<span class="badge failed">⛔停用</span>';
+}
+
+// ═══ 我的 ═══
+// ── 个人资料中心：资料卡（两张独立卡：中文卡 + 英文卡；以后可加国家/地区卡）──
+// 多卡结构：{ cards: [ { id:'zh', label:'中文', ...字段 }, { id:'en', label:'英文', ...字段 } ] }
+// 客户分别填中文卡、英文卡（英文自己填，不自动翻译）；skill 按蓝图 profile_card 选卡、
+// 用 {{字段}} 占位符取，读不到再问客户。
+const PROFILE_CARDS = [
+  {
+    id: 'zh',
+    label: '中文',
+    fields: [
+      ['name','姓名','text'],
+      ['gender','性别','text'],
+      ['birthday','出生日期','text'],
+      ['nationality','国籍/地区','text'],
+      ['province','省份','text'],
+      ['idnum','身份证号','text'],
+      ['idnum_photo','身份证照片','photo'],
+      ['phone','手机号','text'],
+      ['email','邮箱','text'],
+      ['occupation','职业','text'],
+      ['address','地址','text'],
+      ['postal_code','邮编','text'],
+      ['city','城市','text'],
+      ['area','区县','text'],
+      ['linkman','紧急联系人','text'],
+      ['linkmanpho','紧急联系人电话','text'],
+    ],
+  },
+  {
+    id: 'en',
+    label: '英文',
+    fields: [
+      ['name','Name（英文/拼音）','text'],
+      ['gender','Gender','text'],
+      ['birthday','Date of Birth','text'],
+      ['nationality','Nationality','text'],
+      ['province','Province/State','text'],
+      ['passport_no','Passport No.','text'],
+      ['passport_no_photo','Passport Photo','photo'],
+      ['phone','Phone','text'],
+      ['email','Email','text'],
+      ['occupation','Occupation','text'],
+      ['address','Address','text'],
+      ['postal_code','Postal Code','text'],
+      ['city','City','text'],
+      ['area','Area','text'],
+      ['linkman','Emergency Contact','text'],
+      ['linkmanpho','Emergency Contact Phone','text'],
+    ],
+  },
+];
+// 当前主卡（第一张 = 中文卡）
+const PROFILE_CARD_MAIN = PROFILE_CARDS[0];
+// 证件照选择：pickCardPhoto 调原生 → __photoResult 回填（file:// 沙盒路径，skill 按 uri 上传）
+window._cardPhotos = window._cardPhotos || {};
+let _photoSeq = 0; const _photoPending = {};
+function pickCardPhoto(cardId, field) {
+  const id = 'ph' + (++_photoSeq);
+  _photoPending[id] = { cardId, field };
+  try { if (window.AndroidBridge && window.AndroidBridge.pickPhoto) window.AndroidBridge.pickPhoto(cardId, field, id); } catch (e) {}
+}
+window.__photoResult = function(cbId, path) {
+  const p = _photoPending[cbId];
+  if (!p) return;
+  delete _photoPending[cbId];
+  if (path) {
+    window._cardPhotos[p.cardId + '_' + p.field] = path;
+    // 即时持久化到资料卡（避免选了照片没点保存就丢失）
+    try {
+      const em = currentEmail();
+      if (em && isLoggedIn()) {
+        const raw = JSON.parse(localStorage.getItem(profileStorageKey(em)) || '{}');
+        let cards = Array.isArray(raw.cards) ? raw.cards : [];
+        const ci = cards.findIndex(c => c.id === p.cardId);
+        if (ci >= 0) { cards[ci][p.field] = path; }
+        else { const nc = { id: p.cardId }; nc[p.field] = path; cards.push(nc); }
+        localStorage.setItem(profileStorageKey(em), JSON.stringify({ cards }));
+      }
+    } catch (e) {}
+    if (document.getElementById('meBox')) loadMe();
+  }
+};
+
+/** 读当前账号资料：返回 { cards:[], main:{} }（兼容旧单份格式，自动包成中文卡）。 */
+function getProfile() {
+  try {
+    if (!isLoggedIn()) return { cards: [], main: {} };
+    const em = currentEmail();
+    if (em) migrateLegacyLocal(em);
+    const raw = JSON.parse(localStorage.getItem(profileStorageKey(em)) || '{}');
+    let cards = Array.isArray(raw.cards) ? raw.cards : [];
+    if (!cards.length && raw && typeof raw === 'object') {
+      // 旧格式（无 cards）→ 包成中文卡
+      cards = [{ id: 'zh', label: '中文', ...raw }];
+    }
+    return { cards, main: (cards[0] || {}) };
+  } catch (e) { return { cards: [], main: {} }; }
+}
+function profileBoxHtml() {
+  const cards = getProfile().cards;
+  const cardBox = (card) => {
+    const main = cards.find(c=>c.id===card.id) || {};
+    const rows = card.fields.map(([k,label,type]) => {
+      if (type === 'photo') {
+        const v = (window._cardPhotos && window._cardPhotos[card.id+'_'+k]) || main[k] || '';
+        const fn = v.split('/').pop();
+        return `<div class="field-row"><label>${label}</label>
+          <button class="btn small" style="width:auto" onclick="pickCardPhoto('${card.id}','${k}')">📷 ${v ? '已选' : '选择'}</button>
+          ${v ? `<span class="muted" style="font-size:12px;margin-left:6px">${esc(fn)}</span>` : ''}</div>`;
+      }
+      return `<div class="field-row"><label>${label}</label><input id="pf_${card.id}_${k}" type="${type}" value="${esc(main[k]||'')}"></div>`;
+    }).join('');
+    return `<div class="box"><h4>${card.label}卡</h4>${rows}</div>`;
+  };
+  return `<div class="box">
+    <h3>🗂 个人资料中心 <span class="muted" style="font-weight:400">（乘车人/就诊人信息，订票/挂号自动带入；中文、英文各填一张卡）</span></h3>
+    ${PROFILE_CARDS.map(cardBox).join('')}
+    <button class="btn small" onclick="saveProfile()">💾 保存到个人资料中心</button>
+    <div class="muted" style="margin-top:6px">仅存于本机（不上传云端）；执行订票/挂号/登录等才艺时自动带入，换手机需重新填写。</div>
+  </div>`;
+}
+async function saveProfile() {
+  if (!isLoggedIn()) { alert('请先登录'); return; }
+  const em = currentEmail();
+  if (!em) { alert('请先登录'); return; }
+  const prev = getProfile();
+  const cards = PROFILE_CARDS.map(card => {
+    const d = {};
+    const prevCard = (prev.cards || []).find(c => c.id === card.id) || {};
+    card.fields.forEach(([k]) => {
+      const el = $('pf_'+card.id+'_'+k);
+      if (el) d[k] = el.value.trim();
+      else if (window._cardPhotos && window._cardPhotos[card.id+'_'+k]) d[k] = window._cardPhotos[card.id+'_'+k];
+      else d[k] = prevCard[k] || '';   // photo 等无输入框字段：保留原值
+    });
+    return { id: card.id, label: card.label, ...d };
+  });
+  const prof = { cards };
+  localStorage.setItem(profileStorageKey(em), JSON.stringify(prof));
+  // 用户铁律：个人信息只存本机（localStorage），不传云端聚合；按账号分柜
+  // 同步一份到原生本机（skill 请求时按 {{字段}} 占位符填入），仍只存本机
+  try { if (window.AndroidBridge && window.AndroidBridge.saveProfile) window.AndroidBridge.saveProfile(JSON.stringify(prof)); } catch (e) {}
+  appendMsg('bot', '✅ 已保存到个人资料中心');
+  loadMe();
+}
+async function loadMe() {
+  if (!S.token) { $('meBox').innerHTML = '<div class="empty"><b>请先登录</b></div>'; return; }
+  try {
+    const r = await api('/api/v1/me');
+    const u = r.user || {}, mine = r.skills || [];
+    S.skillCatalog = {};
+    mine.forEach(s => {
+      const id = s.skill || s.id;
+      if (id) S.skillCatalog[id] = s;
+    });
+    const nm = u.nickname || (u.email||'').split('@')[0] || '用户';
+    const initial = esc((nm.trim()[0] || '虾').toUpperCase());
+    $('meBox').innerHTML = `
+      <div class="me-hero">
+        <div class="me-avatar">${initial}</div>
+        <div class="me-name">${esc(nm)}</div>
+        <div class="me-sub">${esc(u.email||'')}</div>
+        <div class="me-sub">${esc(u.bio||'（未填写简介）')}</div>
+      </div>
+      <div class="box">
+        <h3>✏️ 编辑资料</h3>
+        <div class="field-row"><label>昵称</label><input id="meNick" value="${esc(u.nickname||'')}"></div>
+        <div class="field-row"><label>简介</label><input id="meBio" value="${esc(u.bio||'')}" placeholder="一句话介绍自己"></div>
+        <button class="btn small" onclick="saveMe()">保存资料</button>
+      </div>
+      ${profileBoxHtml()}
+      ${authBoxHtml()}
+      <div class="box"><h3>我的才艺（${mine.length}）</h3>
+        <div class="muted" style="margin:2px 0 8px">家人在这里管理上场。大厅在顶栏 ✨</div>
+        ${mine.length ? mine.map(s=>`<div style="padding:5px 0">${esc(s.name)} ${skillBadge(s)}</div>`).join('') : '<div class="muted">还没有挂上才艺</div>'}
+      </div>`;
+    loadAuth();
+  } catch (e) { $('meBox').innerHTML = '<div class="empty"><b>加载失败</b>' + esc(e.message) + '</div>'; }
+}
+
+// ── 授权中心：本机有一份凭据就自动出一张卡（不写死平台）──
+function skillMeta(id) {
+  return (S.skillCatalog && S.skillCatalog[id]) || {};
+}
+function skillName(id) {
+  const m = skillMeta(id);
+  return m.name || id;
+}
+function skillAlias(id) {
+  const m = skillMeta(id);
+  const a = m.aliases;
+  if (Array.isArray(a) && a.length) return a[0];
+  return skillName(id);
+}
+function authBoxHtml() {
+  return `<div class="box"><h3>🔐 授权中心 <span class="muted" style="font-weight:400">（登录过的平台会自动出现）</span></h3>
+    <div class="set-row" onclick="showBrowserBtn()">
+      <span class="set-ic">🌐</span>
+      <div class="set-txt">
+        <div class="set-label">内置浏览器</div>
+        <div class="set-sub">登录医院、出行等平台时用这里打开</div>
+      </div>
+      <span class="set-arrow">›</span>
+    </div>
+    <div id="authBox"><div class="muted">加载中…</div></div></div>`;
+}
+function loadAuth() {
+  const box = $('authBox');
+  if (!box) return;
+  if (!window.AndroidBridge || !window.AndroidBridge.getCredentials) { box.innerHTML = '<div class="muted">授权中心暂不可用</div>'; return; }
+  try {
+    const s = JSON.parse(window.AndroidBridge.getCredentials() || '{}');
+    const keys = Object.keys(s);
+    if (!keys.length) { box.innerHTML = '<div class="muted">暂无已登录平台（完成一次平台登录后会自动出现）</div>'; return; }
+    const cats = {};
+    keys.forEach(k => {
+      const it = s[k] || {};
+      const cat = skillMeta(k).category || '已授权';
+      (cats[cat] = cats[cat] || []).push({ skill: k, kind: it.kind, name: skillName(k) });
+    });
+    box.innerHTML = Object.keys(cats).map(cat => `
+      <div style="margin-top:8px;font-size:14px;color:#333"><b>${esc(cat)}</b></div>
+      ${cats[cat].map(it => `
+        <div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #f0f0f0;font-size:15px">
+          <span style="flex:1">${esc(it.name)} <span class="badge done" style="font-size:12px">✅已授权</span></span>
+          <button class="btn small" style="width:auto" onclick="clearAuth('${it.skill}')">退出</button>
+        </div>`).join('')}`).join('');
+  } catch (e) { box.innerHTML = '<div class="muted">授权中心加载失败</div>'; }
+}
+function gotoAuth(skill) {
+  appendMsg('bot', '要授权 ' + skillName(skill) + '，请直接对我说「登录' + skillAlias(skill) + '」，我会引导你完成登录并保存授权。\n也可在「我的 → 授权中心 → 内置浏览器」手动打开登录页。');
+  showView('chat');
+}
+function clearAuth(skill) {
+  if (window.AndroidBridge && window.AndroidBridge.clearCredential) window.AndroidBridge.clearCredential(skill);
+  appendMsg('bot', '✅ 已退出 ' + skillName(skill) + ' 授权');
+  loadAuth();
+}
+async function saveMe() {
+  try {
+    const r = await api('/api/v1/me', { method:'PUT', body: JSON.stringify({ nickname:$('meNick').value.trim(), bio:$('meBio').value.trim() }) });
+    setConn('设备在线');
+    loadMe();
+  } catch (e) { alert(e.message); }
+}
+
+function esc(s) { return String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&','<':'<','>':'>','"':'"'}[c])); }
+
+// 任何输入框聚焦时强制弹出软键盘（中兴等 ROM 的 WebView 输入兼容）
+document.addEventListener('focusin', function(e) {
+  var t = e.target;
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) {
+    if (window.AndroidBridge && window.AndroidBridge.showKeyboard) {
+      try { window.AndroidBridge.showKeyboard(); } catch (err) {}
+    }
+  }
+});
+
+// ═══ 初始化 ═══
+document.addEventListener('DOMContentLoaded', function init() {
+  // 恢复整套皮肤
+  applyTheme(getThemeId(), false);
+  // 云端地址：优先本地存储已存的值，否则默认腾讯云（本地演示可先存局域网地址）
+  S.base = localStorage.getItem('xiami_base') || 'http://140.143.144.28';
+  localStorage.setItem('xiami_base', S.base);
+  bindConvLongPress();
+  bindViewSwipe();
+  const tok = localStorage.getItem('xiami_token');
+  const rt = localStorage.getItem('xiami_refresh');
+  const email = localStorage.getItem('xiami_email');
+  if (email) $('email').value = email;
+  if (tok || rt) {
+    S.token = tok || '';
+    const em = (email || '').trim().toLowerCase();
+    if (em) {
+      migrateLegacyLocal(em);
+      notifyActiveAccount(em);
+    }
+    S._sessLoaded = false;
+    loadSessions();
+    renderConvList();
+    $('connModal').classList.remove('show');
+    setConn('验证登录…');
+    // 持久态：只有服务端明确判定 token/refresh 无效才清除；网络瞬断则保留登录态进入离线并自动重试，
+    // 不再因一次网络抖动就把有效 token 抹掉、强制重新登录。
+    // 启动自动续期：api() 遇 401 会自动用 refresh 换新 access 再重试。
+    const tryValidate = n => {
+      api('/api/v1/me').then(r => {
+        const u = r.user || {};
+        S.userId = u.user_id || u.email || '';   // 新主键 user_id（UUID）
+        S.deviceId = u.email || email;            // 设备通道键保持 email
+        const em2 = (u.email || email || '').trim().toLowerCase();
+        if (em2) {
+          if (currentEmail() !== em2) localStorage.setItem('xiami_email', u.email || email);
+          notifyActiveAccount(em2);
+        }
+        setConn('设备在线');
+        showBrowserBtn();
+        connectWS();
+        loadMe(); syncConversations();
+        showView('chat');   // 已登录 → 进入会话列表首页
+      }).catch(e => {
+        const msg = String((e && e.message) || e);
+        const bad = /401|403|未提供|无效|过期|令牌/i.test(msg);
+        if (bad) {
+          // 服务端明确判定 token/refresh 无效 → 清除并要求重新登录
+          const prev = currentEmail();
+          if (S._sessLoaded && prev) { try { saveSessionsTo(prev); } catch (err) {} }
+          switchLocalAccount('', prev);
+          S.token=''; localStorage.removeItem('xiami_token'); localStorage.removeItem('xiami_refresh');
+          $('connModal').classList.add('show');
+          setConn('未登录');
+          renderConvList();
+        } else {
+          // 网络/暂时性错误 → 保留 token，进入离线态；最多重试 5 次（每 5s），网络恢复自动登录
+          if (n < 5) setTimeout(() => tryValidate(n + 1), 5000);
+          setConn('⚠️ 离线（登录态已保留，自动重试中）');
+          showBrowserBtn();
+          showView('chat');
+        }
+      });
+    };
+    tryValidate(0);
+  } else {
+    // 游客模式：未登录也进入主界面；不加载任何账号的本地会话/凭据
+    notifyActiveAccount('');
+    S._sessLoaded = true;
+    S.sessions = {};
+    S.activeSessId = '';
+    renderConvList();
+    setConn('未登录');
+    showView('chat');
+  }
+});
+
+</script>
+<style>
+
+
+
+  :root {
+    --bg: #f6f7fb;
+    --bg2: #fff;
+    --text: #1f2937;
+    --text2: #111827;
+    --muted: #9ca3af;
+    --muted2: #6b7280;
+    --line: #f0f1f5;
+    --line2: #e5e8f0;
+    --line3: #f3f4f8;
+    --accent: #3d7eff;
+    --accent2: #5aa2ff;
+    --accent-soft: #e8f2ff;
+    --accent-grad: linear-gradient(135deg, #5aa2ff, #3d7eff);
+    --accent-shadow: rgba(61,126,255,.28);
+    --accent-ring: rgba(61,126,255,.14);
+    --input-bg: #f7f8fb;
+    --hover: #f7f8fb;
+    --danger: #ef4444;
+    --sys-bg: #fef3c7;
+    --sys-fg: #92400e;
+    --code-bg: #eef1f9;
+    --code-fg: #c0272d;
+    --pre-bg: #f6f8fb;
+    --me-hero: linear-gradient(180deg, #e7f0ff, #f6f9ff);
+    --modal-mask: rgba(15,23,42,.45);
+    --box-shadow: 0 1px 2px rgba(16,24,40,.04), 0 4px 12px rgba(16,24,40,.05);
+    --chat-wallpaper: var(--bg);
+    --btn-disabled: #a9cdff;
+    --search-bg: #f4f6fa;
+    /* 按钮风格变量（每套壳子不同） */
+    --btn-radius: 11px;
+    --btn-radius-pill: 22px;
+    --btn-radius-sm: 18px;
+    --btn-bg: var(--accent-grad);
+    --btn-fg: #fff;
+    --btn-border: none;
+    --btn-shadow: 0 4px 12px var(--accent-shadow);
+    --btn-weight: 600;
+    --btn-tracking: 0;
+    --btn-transform: none;
+    --ghost-bg: var(--bg2);
+    --ghost-fg: var(--accent);
+    --ghost-border: 1px solid var(--accent);
+    --ghost-shadow: none;
+    --attach-radius: 50%;
+    --attach-bg: var(--accent-soft);
+    --attach-fg: var(--accent);
+    --attach-border: none;
+    --attach-shadow: none;
+    --input-radius: 22px;
+    --font: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    --font-display: var(--font);
+    --avatar-radius: 24px;
+    --letter: 0;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; outline: none; }
+  html, body { height: 100%; }
+  body {
+    font-family: var(--font);
+    letter-spacing: var(--letter);
+    background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased;
+    transition: background .25s, color .25s;
+  }
+
+  /* ── 整体：左侧栏（滑出）+ 右侧主区 ── */
+  .shell { display: flex; height: 100vh; }
+  .main { flex: 1; min-width: 0; }
+
+  /* ── 对话列表通用项（左侧栏抽屉已废弃，改为全屏对话列表页）── */
+  .menu-btn { background: none; border: none; font-size: 20px; cursor: pointer; padding: 4px 8px 4px 0; color: var(--muted2); }
+  .conv-head { padding: 10px 6px 6px; font-size: 12px; color: var(--muted); letter-spacing: .5px; }
+  .conv-item { display: flex; flex-direction: column; padding: 10px 11px; border-radius: 10px; cursor: pointer; position: relative; z-index: 2; background: var(--bg2); transition: transform .18s ease, background .15s; touch-action: pan-y; }
+  .conv-item.active { background: var(--accent-soft); }
+  .conv-item .cn { font-size: 13px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .conv-item .cp { font-size: 11px; color: var(--muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* ── 右侧主区 ── */
+  .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .topbar { display: flex; align-items: center; gap: 8px; padding: 10px 16px; background: var(--bg2); border-bottom: 1px solid var(--line); }
+  .db-title { flex: 1; min-width: 0; text-align: center; }
+  .db-title .title { font-size: 16px; font-weight: 700; color: var(--text2); line-height: 1.2; flex: none; }
+  .db-sub { font-size: 10px; color: var(--muted); margin-top: 1px; }
+  .topbar .title { font-size: 15px; font-weight: 600; flex: 1; color: var(--text2); }
+  .topbar .conn {
+    width: 28px; height: 28px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 50%; cursor: pointer;
+  }
+  .topbar .conn::after {
+    content: ''; width: 9px; height: 9px; border-radius: 50%;
+    background: #9ca3af;
+    box-shadow: 0 0 0 3px rgba(156,163,175,.22);
+    transition: background .25s, box-shadow .25s;
+  }
+  .topbar .conn.online::after {
+    background: #22c55e;
+    box-shadow: 0 0 0 3px rgba(34,197,94,.22), 0 0 8px rgba(34,197,94,.45);
+    animation: connPulse 2.2s ease-in-out infinite;
+  }
+  .topbar .conn.offline::after {
+    background: #ef4444;
+    box-shadow: 0 0 0 3px rgba(239,68,68,.22), 0 0 8px rgba(239,68,68,.4);
+  }
+  .topbar .conn.guest::after {
+    background: #9ca3af;
+    box-shadow: 0 0 0 3px rgba(156,163,175,.18);
+  }
+  @keyframes connPulse {
+    0%, 100% { box-shadow: 0 0 0 3px rgba(34,197,94,.22), 0 0 8px rgba(34,197,94,.45); }
+    50% { box-shadow: 0 0 0 5px rgba(34,197,94,.12), 0 0 12px rgba(34,197,94,.55); }
+  }
+
+  /* ── 豆包式推荐/快捷 ── */
+  .db-suggest { max-width: 700px; margin: 0 auto; padding: 8px 2px 24px; }
+  .db-suggest-title { font-size: 12px; color: var(--muted); padding: 4px 2px 8px; }
+  .db-chip { background: var(--bg2); border: 1px solid var(--line); border-radius: 12px; padding: 11px 14px; margin-bottom: 8px; font-size: 14px; color: var(--text); cursor: pointer; box-shadow: 0 1px 2px rgba(16,24,40,.04); }
+  .db-chip:active { background: var(--hover); }
+  .db-quickrow { display: flex; gap: 8px; padding: 8px 16px 2px; background: var(--bg); }
+  .db-q { flex: 1; background: var(--bg2); border: 1px solid var(--line); border-radius: 12px; padding: 12px 4px; text-align: center; font-size: 12px; color: var(--muted2); cursor: pointer; }
+  .db-q:active { background: var(--hover); }
+
+  /* ── 对话列表全屏页（豆包式：拉开的一页）── */
+  .lv-head { display: flex; align-items: center; gap: 6px; padding: 12px 14px 8px; }
+  .lv-title { flex: 1; font-size: 17px; font-weight: 700; color: var(--text2); text-align: center; }
+  .lv-new {
+    background: var(--btn-bg); color: var(--btn-fg); border: var(--btn-border); border-radius: var(--btn-radius-sm);
+    padding: 7px 14px; font-size: 13px; font-weight: var(--btn-weight); letter-spacing: var(--btn-tracking);
+    text-transform: var(--btn-transform); cursor: pointer; box-shadow: var(--btn-shadow);
+  }
+  .lv-search { padding: 6px 14px 4px; }
+  .lv-search input { background: var(--search-bg); color: var(--text); border: none; border-radius: 18px; padding: 10px 14px; font-size: 14px; margin-top: 0; }
+  .lv-list { flex: 1; overflow-y: auto; padding: 4px 14px 10px; }
+  .lv-list .conv-head { padding: 12px 2px 8px; font-size: 12px; color: var(--muted); }
+  .lv-list .conv-item { display: flex; flex-direction: row; align-items: center; gap: 12px; padding: 13px 4px; border-radius: 10px; border-bottom: 1px solid var(--line3); background: none; }
+  .lv-list .conv-item.active { background: var(--accent-soft); border-radius: 10px; }
+  .lv-list .conv-avatar { width: 40px; height: 40px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-size: 18px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .lv-list .conv-item .cn { flex: 1; font-size: 15px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .lv-list .conv-time { font-size: 12px; color: var(--muted); flex-shrink: 0; }
+  /* 空态（豆包式：居中引导页，不再与「最近对话」标题重复） */
+  .lv-list .conv-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 72px 24px; color: var(--muted); text-align: center; }
+  .lv-list .conv-empty .ce-ico { width: 72px; height: 72px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-size: 34px; display: flex; align-items: center; justify-content: center; margin-bottom: 16px; }
+  .lv-list .conv-empty .ce-title { font-size: 16px; font-weight: 700; color: var(--text2); margin-bottom: 6px; }
+  .lv-list .conv-empty .ce-sub { font-size: 13px; color: var(--muted); margin-bottom: 22px; line-height: 1.6; }
+  .lv-list .conv-empty .ce-btn { background: var(--btn-bg); color: var(--btn-fg); border: var(--btn-border); border-radius: var(--btn-radius-sm); padding: 10px 22px; font-size: 14px; font-weight: var(--btn-weight); cursor: pointer; box-shadow: var(--btn-shadow); }
+  .lv-foot { padding: 10px 14px 22px; border-top: 1px solid var(--line); }
+  .lv-item { display: flex; align-items: center; gap: 10px; padding: 11px 4px; font-size: 15px; color: var(--muted2); cursor: pointer; }
+  .lv-item:active { color: var(--accent); }
+
+  .view { flex: 1; display: none; flex-direction: column; min-height: 0; }
+  .view.active { display: flex; }
+
+  /* ── 聊天（Kimi 风格：浅色底 + 柔和圆角气泡）── */
+  #chatView { background: var(--chat-wallpaper); background-attachment: fixed; }
+  .chat-scroll { flex: 1; overflow-y: auto; padding: 20px 16px; }
+  .chat-inner { max-width: 700px; margin: 0 auto; }
+  .msg { font-size: 17px; line-height: 1.7; word-break: break-word; margin-bottom: 18px; }
+  .msg.user { background: var(--accent-grad); color: #fff; padding: 10px 14px; border-radius: 16px; border-bottom-right-radius: 6px; max-width: 80%; margin-left: auto; white-space: pre-wrap; box-shadow: 0 2px 8px var(--accent-shadow); }
+  .msg.bot { background: transparent; color: var(--text); max-width: 100%; }
+  .msg.sys { background: var(--sys-bg); color: var(--sys-fg); font-size: 15px; text-align: center; max-width: 100%; border-radius: 12px; padding: 8px 12px; margin-bottom: 12px; }
+  .chat-welcome { text-align: center; color: var(--muted); padding: 22vh 28px 40px; }
+  .db-title .title, .lv-title, .chat-welcome h2, .me-name, .modal h2, .box h3 {
+    font-family: var(--font-display);
+  }
+  .chat-welcome .welcome-avatar {
+    width: 64px; height: 64px; margin: 0 auto 28px; border-radius: var(--avatar-radius);
+    background: var(--accent-grad); color: #fff; font-size: 32px;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 10px 24px var(--accent-shadow);
+  }
+  .chat-welcome h2 {
+    font-size: 26px; color: var(--text2); margin: 0; font-weight: 650;
+    letter-spacing: .18em; line-height: 1.35;
+  }
+  .chat-welcome h2 b { color: var(--accent); font-weight: 800; }
+  .chat-welcome .welcome-sub {
+    display: inline-flex; align-items: center; gap: 8px;
+    margin-top: 22px; padding: 8px 16px 8px 12px;
+    border-radius: 999px; font-size: 14px; line-height: 1;
+    letter-spacing: .06em; color: var(--muted2);
+    background: var(--hover); border: 1px solid var(--line);
+    cursor: pointer;
+  }
+  .chat-welcome .welcome-spark { font-size: 15px; line-height: 1; transform: translateY(-0.5px); }
+  /* ask_user 建议选项按钮条（点选代替打字） */
+  .ask-options {
+    display: flex; flex-wrap: wrap; gap: 8px;
+    padding: 8px 14px 0; max-width: 700px; margin: 0 auto;
+  }
+  .ask-opt {
+    padding: 9px 15px; font-size: 14px; color: var(--accent);
+    background: var(--bg2); border: 1px solid var(--accent); border-radius: 18px;
+    cursor: pointer; transition: background .15s, color .15s;
+  }
+  .ask-opt:active { background: var(--accent); color: var(--bg2); }
+  .chat-inputbar {
+    padding: 10px 14px 14px;
+    background: var(--bg2);
+    border-top: 1px solid var(--line);
+  }
+  .chat-input-inner { max-width: 700px; margin: 0 auto; }
+  /* 豆包式：加号 + 输入 + 发送 同框一体 */
+  .chat-composer {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    min-height: 48px;
+    padding: 5px 5px 5px 4px;
+    background: var(--input-bg);
+    border: 1px solid var(--line2);
+    border-radius: 24px;
+    transition: border-color .15s, box-shadow .15s, background .15s;
+  }
+  .chat-composer:focus-within {
+    border-color: var(--accent);
+    background: var(--bg2);
+    box-shadow: 0 0 0 3px var(--accent-ring);
+  }
+  .chat-composer .attach {
+    width: 38px; height: 38px; flex-shrink: 0;
+    border: none; border-radius: 50%;
+    background: transparent; color: var(--muted2);
+    font-size: 22px; line-height: 1; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    padding: 0; margin: 0; box-shadow: none;
+  }
+  .chat-composer .attach:active { background: var(--hover); color: var(--accent); }
+  .chat-composer input[type="text"] {
+    flex: 1; min-width: 0;
+    border: none; background: transparent;
+    padding: 10px 6px; margin: 0;
+    font-size: 16px; color: var(--text); outline: none;
+    border-radius: 0; box-shadow: none;
+  }
+  .chat-composer input[type="text"]:focus {
+    border: none; background: transparent; box-shadow: none;
+  }
+  .chat-composer .send-btn {
+    width: 38px; height: 38px; flex-shrink: 0;
+    border: none; border-radius: 50%;
+    padding: 0; margin: 0;
+    background: var(--accent-grad); color: #fff;
+    font-size: 18px; font-weight: 700; line-height: 1;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 3px 10px var(--accent-shadow);
+    letter-spacing: 0; text-transform: none;
+    transition: transform .1s, opacity .15s;
+  }
+  .chat-composer .send-btn:active { transform: scale(.94); }
+  .chat-composer .send-btn:disabled {
+    background: var(--line2); color: var(--muted); box-shadow: none; opacity: .7;
+  }
+  .chat-composer .send-btn .send-ico {
+    display: block; transform: translateY(-1px);
+  }
+  .statusline { max-width: 700px; margin: 0 auto; font-size: 12px; color: var(--muted2); padding: 4px 2px 0; }
+
+  /* ── 会话列表首页（豆包式）── */
+  #listView { background: var(--bg2); }
+  .list-head { display: flex; align-items: center; gap: 6px; padding: 14px 16px 10px; }
+  .list-logo { font-size: 19px; font-weight: 800; color: var(--text2); flex: 1; }
+  .list-logo b { color: var(--accent); }
+  .list-new {
+    background: var(--btn-bg); color: var(--btn-fg); border: var(--btn-border); border-radius: var(--btn-radius-sm);
+    padding: 8px 16px; font-size: 14px; font-weight: var(--btn-weight); letter-spacing: var(--btn-tracking);
+    text-transform: var(--btn-transform); cursor: pointer; box-shadow: var(--btn-shadow);
+  }
+  .list-scroll { flex: 1; overflow-y: auto; padding: 4px 14px 20px; }
+  .list-item { display: flex; align-items: center; gap: 12px; padding: 13px 4px; border-bottom: 1px solid var(--line3); cursor: pointer; }
+  .list-item:active { background: var(--hover); }
+  .list-avatar { width: 44px; height: 44px; border-radius: var(--avatar-radius); background: var(--accent-soft); color: var(--accent); font-size: 20px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .list-info { flex: 1; min-width: 0; }
+  .list-title { font-size: 16px; font-weight: 600; color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .list-prev { font-size: 13px; color: var(--muted); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .list-time { font-size: 11px; color: var(--muted); flex-shrink: 0; }
+  .list-empty { text-align: center; color: var(--muted); padding: 70px 20px; }
+  .list-empty b { display: block; font-size: 16px; color: var(--muted2); margin: 8px 0 4px; }
+
+  /* ── 消息 markdown（豆包式结构化排版）── */
+  .msg .md { word-break: break-word; }
+  .msg .md h1 { font-size: 20px; font-weight: 800; margin: 12px 0 6px; }
+  .msg .md h2 { font-size: 18px; font-weight: 800; margin: 12px 0 6px; }
+  .msg .md h3 { font-size: 16px; font-weight: 700; margin: 10px 0 5px; }
+  .msg .md h4 { font-size: 15px; font-weight: 700; margin: 8px 0 4px; }
+  .msg .md p { margin: 8px 0; }
+  .msg .md ul, .msg .md ol { margin: 8px 0 8px 22px; }
+  .msg .md li { margin: 5px 0; }
+  .msg .md code { background: var(--code-bg); color: var(--code-fg); border-radius: 5px; padding: 1px 5px; font-size: 14px; }
+  .msg .md pre { background: var(--pre-bg); border-radius: 10px; padding: 10px 12px; overflow-x: auto; margin: 8px 0; }
+  .msg .md pre code { background: none; color: var(--text); padding: 0; }
+  .msg .md a { color: var(--accent); }
+  .msg .md table { border-collapse: collapse; margin: 8px 0; width: 100%; font-size: 14px; }
+  .msg .md th, .msg .md td { border: 1px solid var(--line2); padding: 6px 9px; text-align: left; }
+  .msg .md th { background: var(--pre-bg); font-weight: 600; }
+  .msg .md hr { border: none; border-top: 1px solid var(--line2); margin: 10px 0; }
+  .msg .md .md-gap { height: 6px; }
+  .msg-copy { font-size: 11px; color: var(--muted); margin-top: 6px; cursor: pointer; display: inline-block; padding: 2px 8px; border-radius: 6px; }
+  .msg-copy:active { background: var(--line); }
+
+  /* ── 我的 / 浏览器 ── */
+  .panel { flex: 1; overflow-y: auto; padding: 16px; }
+  .box { background: var(--bg2); border-radius: 14px; padding: 15px; margin-bottom: 10px; box-shadow: var(--box-shadow); }
+  .box h3 { font-size: 15px; color: var(--text2); }
+  .muted { color: var(--muted); font-size: 12px; }
+
+  /* ── 我的：豆包风格头部卡片 ── */
+  .me-hero { text-align: center; padding: 30px 16px 24px; border-radius: 16px; margin-bottom: 12px; background: var(--me-hero); }
+  .me-avatar { width: 76px; height: 76px; border-radius: var(--avatar-radius); margin: 0 auto 12px; background: var(--accent-grad); color: #fff; font-size: 32px; font-weight: 700; display: flex; align-items: center; justify-content: center; box-shadow: 0 6px 16px var(--accent-shadow); }
+  .lv-list .conv-avatar { border-radius: var(--avatar-radius); }
+  .list-avatar { border-radius: var(--avatar-radius); }
+  .me-name { font-size: 21px; font-weight: 800; color: var(--text2); }
+  .me-sub { margin-top: 7px; font-size: 13px; color: var(--muted2); }
+
+  /* ── 设置（标准清爽列表）── */
+  .set-row { display: flex; align-items: center; gap: 12px; padding: 12px 2px; border-bottom: 1px solid var(--line); cursor: pointer; }
+  .set-row:last-of-type { border-bottom: none; }
+  .set-ic { width: 34px; height: 34px; border-radius: var(--btn-radius); background: var(--accent-soft); color: var(--accent); font-size: 17px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .set-txt { flex: 1; min-width: 0; }
+  .set-label { font-size: 15px; color: var(--text2); font-weight: 600; }
+  .set-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .set-arrow { color: var(--muted); font-size: 20px; }
+  .set-edit { display: flex; gap: 8px; align-items: center; margin-top: 9px; }
+  .set-edit input { flex: 1; margin-top: 0; }
+  .set-edit .btn { width: auto; margin-top: 0; padding: 11px 16px; }
+  .set-sec { font-size: 12px; color: var(--muted); margin: 12px 2px 8px; letter-spacing: .3px; }
+  .theme-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .theme-card {
+    border: 2px solid transparent; border-radius: 16px; overflow: hidden; cursor: pointer;
+    background: var(--hover); transition: border-color .15s, transform .1s;
+  }
+  .theme-card:active { transform: scale(.97); }
+  .theme-card.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-ring); }
+  .theme-swatch {
+    height: 72px; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 6px; position: relative; padding: 10px;
+  }
+  .theme-bot {
+    width: 36px; height: 36px; border-radius: 12px; background: rgba(255,255,255,.22);
+    display: flex; align-items: center; justify-content: center; font-size: 20px;
+    border: 1px solid rgba(255,255,255,.35); box-shadow: 0 4px 10px rgba(0,0,0,.15);
+  }
+  .theme-swatch .theme-btn-demo {
+    font-size: 9px; padding: 3px 10px; color: #fff; font-weight: 700;
+    background: rgba(0,0,0,.22); border: 1px solid rgba(255,255,255,.35);
+  }
+  .theme-dot { position: absolute; right: 8px; bottom: 8px; width: 12px; height: 12px; border-radius: 50%; border: 2px solid rgba(255,255,255,.75); box-shadow: 0 1px 4px rgba(0,0,0,.25); }
+  .theme-name { font-size: 13px; padding: 8px 8px 2px; text-align: center; color: var(--text); font-weight: 700; line-height: 1.2; }
+  .theme-btn-tag { font-size: 10px; color: var(--muted); text-align: center; padding: 0 8px 10px; line-height: 1.35; }
+
+  /* ── 通用 ── */
+  .btn {
+    background: var(--btn-bg); color: var(--btn-fg); border: var(--btn-border); border-radius: var(--btn-radius);
+    padding: 11px 15px; font-size: 14px; font-weight: var(--btn-weight); letter-spacing: var(--btn-tracking);
+    text-transform: var(--btn-transform); cursor: pointer; width: 100%; margin-top: 9px;
+    transition: opacity .15s, transform .1s, box-shadow .15s; box-shadow: var(--btn-shadow);
+  }
+  .btn:active { transform: scale(.98); }
+  .btn:disabled { background: var(--btn-disabled); box-shadow: none; }
+  .btn.ghost { background: var(--ghost-bg); color: var(--ghost-fg); border: var(--ghost-border); box-shadow: var(--ghost-shadow); }
+  .btn.danger { background: var(--danger); color: #fff; border: none; box-shadow: 0 4px 12px rgba(239,68,68,.28); }
+  .btn.muted, .btn.cancel { background: var(--hover); color: var(--muted2); border: 1px solid var(--line2); box-shadow: none; }
+  .btn.small { width: auto; padding: 7px 13px; font-size: 13px; margin-top: 0; }
+  input, textarea { width: 100%; padding: 11px; border-radius: var(--btn-radius); border: 1px solid var(--line2); font-size: 14px; margin-top: 6px; outline: none; background: var(--input-bg); color: var(--text); }
+  input:focus, textarea:focus { border-color: var(--accent); background: var(--bg2); }
+  .badge { display: inline-block; padding: 2px 9px; border-radius: 10px; font-size: 11px; background: var(--line); color: var(--muted2); }
+  .badge.done { background: #d8f3e3; color: #0f7a3d; } .badge.waiting { background: #ffe9c2; color: #9a5b00; }
+  .badge.failed, .badge.cancelled { background: #fde3e3; color: #c0392b; } .badge.running { background: #fff3cd; color: #92600a; }
+  .field-row { margin-top: 9px; }
+  .field-row label { font-size: 12px; color: var(--muted2); }
+  .empty { text-align: center; color: var(--muted); padding: 48px 0; font-size: 13px; }
+  .empty b { display: block; font-size: 15px; color: var(--muted2); margin-bottom: 6px; }
+
+  /* ── 弹层 ── */
+  .modal-bg { position: fixed; top: 0; right: 0; bottom: 0; left: 0; background: var(--modal-mask); display: none; align-items: center; justify-content: center; z-index: 30; }
+  .modal-bg.show { display: flex; }
+  .modal { background: var(--bg2); border-radius: 20px; padding: 22px; width: 92%; max-width: 420px; max-height: 86vh; overflow-y: auto; box-shadow: 0 8px 40px rgba(15,23,42,.16); }
+  .modal h2 { font-size: 17px; margin-bottom: 6px; color: var(--text2); }
+
+
+
+</style>
+</head>
+<body>
+<div class="shell">
+  <!-- 右侧主区 -->
+  <div class="main">
+    <div class="topbar">
+      <button class="menu-btn" onclick="showView('list')" title="对话列表">☰</button>
+      <button class="menu-btn" onclick="showView('showcase')" title="才艺">✨</button>
+      <button class="menu-btn" id="backBtn" onclick="showView('chat')" style="display:none" title="返回对话">←</button>
+      <div class="db-title">
+        <div class="title" id="viewTitle">虾米</div>
+        <div class="db-sub" id="viewSub">AI 生成可能有误 注意核实</div>
+      </div>
+      <div class="conn guest" id="connInfo" onclick="openConn()" title="未登录"></div>
+    </div>
+
+    <!-- 对话列表（豆包式：全屏拉开的一页） -->
+    <div class="view" id="listView">
+      <div class="lv-head">
+        <div class="lv-title">对话列表</div>
+        <button class="lv-new" onclick="newSess()">＋ 新对话</button>
+      </div>
+      <div class="lv-search"><input id="lvSearch" placeholder="搜索对话" oninput="renderConvList()"></div>
+      <div class="lv-list" id="convList">
+        <div class="conv-head">对话</div>
+      </div>
+      <div class="lv-foot">
+        <div class="lv-item" id="mi-me" onclick="navTo('me')"><span id="icMe">👤</span> 个人用户</div>
+        <div class="lv-item" id="mi-settings" onclick="navTo('settings')"><span id="icSettings">⚙️</span> 设置</div>
+      </div>
+    </div>
+
+    <!-- 对话（豆包式主界面：聊天 + 推荐 + 快捷 + 输入） -->
+    <div class="view active" id="chatView">
+      <div class="chat-scroll" id="chatScroll">
+        <div class="chat-inner" id="chatInner">
+          <div class="chat-welcome" id="chatWelcome"><div class="welcome-avatar" id="welcomeBot">🤖</div><h2>家里有人</h2><div class="welcome-sub" onclick="showView('showcase')"><span class="welcome-spark">✨</span>去才艺，看家里谁会</div></div>
+        </div>
+      </div>
+      <div class="ask-options" id="askOptionsBar" style="display:none"></div>
+      <div class="chat-inputbar">
+        <div class="chat-input-inner">
+          <div class="chat-composer">
+            <button class="attach" onclick="try{if(window.AndroidBridge&&window.AndroidBridge.chooseFile)window.AndroidBridge.chooseFile()}catch(e){}" title="选择文件" type="button">＋</button>
+            <button class="attach" onclick="try{if(window.AndroidBridge&&window.AndroidBridge.takePhoto)window.AndroidBridge.takePhoto()}catch(e){}" title="拍照" type="button">📷</button>
+            <input type="text" id="msg" placeholder="说点什么…" onkeydown="if(event.key==='Enter')sendMsg()" oninput="syncSendBtn()" onfocus="try{if(window.AndroidBridge)window.AndroidBridge.showKeyboard()}catch(e){}">
+            <button id="sendBtn" class="send-btn" onclick="sendMsg()" type="button" title="发送" disabled><span class="send-ico">↑</span></button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 设置（标准清爽分组） -->
+    <div class="view" id="settingsView">
+      <div class="panel">
+        <!-- 外观：一整套皮肤 -->
+        <div class="box">
+          <h3>外观 · 整套皮肤</h3>
+          <div class="muted" style="margin:2px 0 8px">一套换齐：颜色、按钮、壁纸、字体、图标、机器人</div>
+          <div class="set-sec">浅色套装</div>
+          <div class="theme-grid" id="themeLight"></div>
+          <div class="set-sec">黑暗套装</div>
+          <div class="theme-grid" id="themeDark"></div>
+        </div>
+        <!-- 账号 -->
+        <div class="box">
+          <h3>账号</h3>
+          <div class="set-row">
+            <span class="set-ic" id="icSetMe">👤</span>
+            <div class="set-txt"><div class="set-label" id="setAcct">未登录</div><div class="set-sub">当前登录的账号</div></div>
+          </div>
+          <div class="set-row" id="setLogout" onclick="doLogout()" style="display:none">
+            <span class="set-ic" id="icSetOut">↩</span>
+            <div class="set-txt"><div class="set-label">退出登录</div><div class="set-sub">退出后需要重新登录</div></div>
+          </div>
+        </div>
+        <!-- 关于 -->
+        <div class="box">
+          <h3>关于</h3>
+          <div class="set-row" onclick="alert('虾米 · 云端大脑 + 手机执行\n版本 0.1.0')">
+            <span class="set-ic" id="icSetAbout">ℹ️</span>
+            <div class="set-txt"><div class="set-label">版本</div><div class="set-sub">虾米 0.1.0 · 云端大脑 + 手机执行</div></div>
+            <span class="set-arrow">›</span>
+          </div>
+        </div>
+        <div class="muted" style="text-align:center;padding:12px">虾米 · 云端大脑 + 手机执行</div>
+      </div>
+    </div>
+
+    <!-- 我的 -->
+    <div class="view" id="meView"><div class="panel" id="meBox"></div></div>
+
+    <!-- 才艺（才艺分区：看家人；对话绑的是上台卡） -->
+    <div class="view" id="showcaseView">
+      <iframe id="showcaseFrame" title="才艺" style="flex:1;border:0;width:100%;height:100%;min-height:0;background:#0b0d12"></iframe>
+    </div>
+  </div>
+</div>
+
+<!-- 登录弹层 -->
+<div class="modal-bg" id="connModal" onclick="if(event.target===this)closeConn()">
+  <div class="modal">
+    <h2>登录虾米</h2>
+    <div class="muted" style="margin-bottom:10px">用户名 / 邮箱 · 密码（新邮箱可注册）</div>
+    <label class="muted">用户名 / 邮箱</label>
+    <input id="email" placeholder="用户名或邮箱">
+    <label class="muted">密码</label>
+    <input id="pass" type="password" placeholder="密码（≥6位）">
+    <button class="btn" id="loginBtn" onclick="doLogin(false)">登录</button>
+    <button class="btn ghost" id="regBtn" onclick="doLogin(true)">注册（邮箱注册）</button>
+    <div class="muted" style="margin-top:8px" id="connMsg"></div>
+    <div class="hint">登录后进入聊天主界面；新邮箱点「注册」自动建号（用户名=邮箱前缀，可在「我的」改）。</div>
+  </div>
+</div>
+
+<!-- 账号信息弹层（已登录时点击顶部状态弹出；不再误弹登录框） -->
+<div class="modal-bg" id="accountModal" onclick="if(event.target===this)closeAccount()">
+  <div class="modal">
+    <h2>👤 我的账号</h2>
+    <div class="muted" style="margin:4px 0 2px">登录账号</div>
+    <div style="font-size:16px;font-weight:600" id="acctEmail">-</div>
+    <button class="btn" onclick="showView('me');closeAccount()">📋 个人资料</button>
+    <button class="btn ghost" onclick="closeAccount()">关闭</button>
+    <button class="btn danger" onclick="doLogout()">↩ 退出登录</button>
+  </div>
+</div>
+
+<!-- 会话操作菜单（长按/右键弹出：置顶 / 重命名 / 清空 / 删除 / 取消） -->
+<div class="modal-bg" id="convMenu" onclick="if(event.target===this)closeConvMenu()">
+  <div class="modal" style="text-align:center">
+    <div id="convMenuTitle" style="font-size:15px;font-weight:700;margin-bottom:12px;word-break:break-all">对话</div>
+    <button class="btn" onclick="convMenuAction('pin')" id="convMenuPin">置顶</button>
+    <button class="btn ghost" onclick="convMenuAction('rename')">重命名</button>
+    <button class="btn ghost" onclick="convMenuAction('clear')">清空对话</button>
+    <button class="btn danger" onclick="convMenuAction('delete')">删除对话</button>
+    <button class="btn cancel" onclick="closeConvMenu()">取消</button>
+  </div>
+</div>
+
+<!-- 重命名会话（WebView 不支持 prompt，改用原生输入弹层） -->
+<div class="modal-bg" id="renameModal" onclick="if(event.target===this)closeRename()">
+  <div class="modal">
+    <h2>重命名对话</h2>
+    <input id="renameInput" type="text" maxlength="40" placeholder="输入新名称">
+    <button class="btn" onclick="doRename()">确定</button>
+    <button class="btn ghost" onclick="closeRename()">取消</button>
+  </div>
+</div>
+
+<!-- 删除会话确认（WebView 不支持 confirm，改用原生确认弹层） -->
+<div class="modal-bg" id="delModal" onclick="if(event.target===this)closeDel()">
+  <div class="modal" style="text-align:center">
+    <div style="font-size:16px;font-weight:700;margin-bottom:8px">删除对话</div>
+    <div class="muted" style="margin-bottom:12px">删除后不可恢复，确定删除「<span id="delModalName">对话</span>」吗？</div>
+    <button class="btn danger" onclick="doDel()">删除</button>
+    <button class="btn ghost" onclick="closeDel()">取消</button>
+  </div>
+</div>
+
+<!-- 清空对话确认（原生确认弹层，仿删除；只清消息、保留会话与 hire 绑定） -->
+<div class="modal-bg" id="clearModal" onclick="if(event.target===this)closeClear()">
+  <div class="modal" style="text-align:center">
+    <div style="font-size:16px;font-weight:700;margin-bottom:8px">清空对话</div>
+    <div class="muted" style="margin-bottom:12px">清空后不可恢复，确定清空「<span id="clearModalName">对话</span>」的所有消息吗？</div>
+    <button class="btn danger" onclick="doClear()">清空</button>
+    <button class="btn ghost" onclick="closeClear()">取消</button>
+  </div>
+</div>
+
+</body>
+</html>

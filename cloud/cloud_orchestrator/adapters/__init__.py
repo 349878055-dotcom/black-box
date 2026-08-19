@@ -1,6 +1,1 @@
-"""
-skill（平台逆向 API）包。
-
-每个 skill = 一个 *_api.py：requests 直调 HTTP 接口，返回结构化 dict/list（AI 可直接读）。
-registry.py 提供 skill_list / skill_run 给主代理。
-"""
+"""skill 注册表（registry）：扫描各人 skill_archive 下挂的才艺包。"""

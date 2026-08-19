@@ -1,0 +1,11 @@
+{
+  "payment": {
+    "kind": "scheme",
+    "source": "generate_deep_link",
+    "field": "scheme",
+    "fallback_https": "https_link",
+    "schemes": [
+      "alipays://"
+    ]
+  }
+}

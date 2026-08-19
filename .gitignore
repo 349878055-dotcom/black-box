@@ -17,8 +17,9 @@ cloud/cloud_orchestrator/data/
 *预约完成*.html
 
 # 构建产物（Android）
-app/app/build/
-app/build/
+app/project/app/build/
+app/project/build/
+app/project/.gradle/
 **/.gradle/
 **/build/intermediates/
 **/build/outputs/
@@ -44,6 +45,7 @@ Thumbs.db
 cloud/models/
 
 # Android 本地配置（SDK 路径，不入库）
+app/project/local.properties
 app/local.properties
 
 # 临时截图（验证码等，不入库）

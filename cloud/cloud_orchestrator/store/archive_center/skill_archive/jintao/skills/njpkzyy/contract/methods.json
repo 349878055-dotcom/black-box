@@ -1,0 +1,207 @@
+{
+  "methods": [
+    {
+      "name": "list_depts",
+      "desc": "科室列表（两级：父科室 pid 分组 + 子科室）→ [{dept_code, dept_name, pid, ...}]",
+      "need_login": false,
+      "params": {
+        "branch_code": ""
+      },
+      "customer_input": [],
+      "keywords": [
+        "科室",
+        "有哪些科",
+        "浦口中医院科室"
+      ],
+      "success_ret": "",
+      "error_ret": "",
+      "system_only": false,
+      "stage": "final",
+      "deliver": "query"
+    },
+    {
+      "name": "list_noon_codes",
+      "desc": "午别/时段编码 → [{noon_name, noon_code(1上午/2下午/3夜间/6全天), time_part}]",
+      "need_login": false,
+      "params": {
+        "branch_code": "",
+        "branch_name": ""
+      },
+      "customer_input": [],
+      "keywords": [
+        "午别",
+        "上午",
+        "下午",
+        "号源时段"
+      ],
+      "success_ret": "",
+      "error_ret": "",
+      "system_only": false,
+      "stage": "final",
+      "deliver": "query"
+    },
+    {
+      "name": "list_dept_doctors",
+      "desc": "科室医生 → [{doctor_code, doctor_name, dept_name, speciality, ...}]",
+      "need_login": false,
+      "params": {
+        "dept_code": "",
+        "branch_code": "",
+        "branch_name": ""
+      },
+      "customer_input": [
+        "dept_code"
+      ],
+      "keywords": [
+        "医生",
+        "专家",
+        "大夫"
+      ],
+      "success_ret": "",
+      "error_ret": "",
+      "system_only": false,
+      "stage": "final",
+      "deliver": "query"
+    },
+    {
+      "name": "get_available_dates",
+      "desc": "可约日期 → [YYYY-MM-DD, ...]（默认今天~+7天；dept_code 必填）",
+      "need_login": false,
+      "params": {
+        "dept_code": "",
+        "begin_date": "YYYY-MM-DD",
+        "end_date": "YYYY-MM-DD",
+        "schedule_type": "3",
+        "channel": "dept",
+        "type": "0"
+      },
+      "customer_input": [
+        "dept_code"
+      ],
+      "keywords": [
+        "可约日期",
+        "哪天能约",
+        "放号"
+      ],
+      "success_ret": "",
+      "error_ret": "",
+      "system_only": false,
+      "stage": "final",
+      "deliver": "query"
+    },
+    {
+      "name": "get_schedule",
+      "desc": "某科室某天排班 → [{schedule_id, reg_name, noon_code, doctor, detail(时段)}]",
+      "need_login": false,
+      "params": {
+        "dept_code": "",
+        "begin_date": "YYYY-MM-DD",
+        "end_date": "YYYY-MM-DD",
+        "channel": "dept",
+        "type": "0"
+      },
+      "customer_input": [
+        "dept_code"
+      ],
+      "keywords": [
+        "排班",
+        "出诊时间",
+        "哪天有号"
+      ],
+      "success_ret": "",
+      "error_ret": "",
+      "system_only": false,
+      "stage": "final",
+      "deliver": "query"
+    },
+    {
+      "name": "judge_online",
+      "desc": "在线号判断（是否可挂在线号）→ 需 ONLINE_AGENT_ID",
+      "need_login": false,
+      "params": {
+        "date": "YYYY-MM-DD",
+        "dept_code": "",
+        "doctor_code": "",
+        "noon_code": "",
+        "time_type": "",
+        "type": "0"
+      },
+      "customer_input": [
+        "date",
+        "dept_code",
+        "doctor_code",
+        "noon_code"
+      ],
+      "keywords": [
+        "在线号",
+        "线上号",
+        "能在线挂吗"
+      ],
+      "success_ret": "",
+      "error_ret": "",
+      "system_only": false,
+      "stage": "final",
+      "deliver": "query"
+    },
+    {
+      "name": "get_schedule_detail",
+      "desc": "在线号时段详情 → [{time_part, schedule_num_id, remaining_num, is_enable, ...}]",
+      "need_login": false,
+      "params": {
+        "schedule_id": "",
+        "schedule_day": "YYYY-MM-DD",
+        "type": "0"
+      },
+      "customer_input": [],
+      "keywords": [
+        "时段",
+        "号源详情",
+        "剩余号"
+      ],
+      "success_ret": "",
+      "error_ret": "",
+      "system_only": false,
+      "stage": "final",
+      "deliver": "query"
+    },
+    {
+      "name": "get_pay_channels",
+      "desc": "支付渠道 → [{pay_channel, name, status}]（如 WX_JSAPI 微信支付）",
+      "need_login": false,
+      "params": {},
+      "customer_input": [],
+      "keywords": [
+        "支付渠道",
+        "怎么付",
+        "支付方式"
+      ],
+      "success_ret": "",
+      "error_ret": "",
+      "system_only": false,
+      "stage": "final",
+      "deliver": "query"
+    },
+    {
+      "name": "generate_deep_link",
+      "desc": "生成支付宝直达链接 → 客户点开唤起支付宝 App 直达挂号确认页（客户在支付宝内自行确认挂号并支付）。appId+页面路径已解码入库，无需任何密钥",
+      "need_login": false,
+      "params": {
+        "appid": "2021002127607132",
+        "page": "pages/public/bookingConfirm/bookingConfirm?__appxPageId=11"
+      },
+      "customer_input": [],
+      "keywords": [
+        "挂号链接",
+        "直达挂号",
+        "支付宝链接",
+        "深链",
+        "拉起支付宝"
+      ],
+      "success_ret": "{\"ok\": true, \"scheme\": \"alipays://...\", \"https_link\": \"https://render.alipay.com/...\"}",
+      "error_ret": "",
+      "system_only": false,
+      "stage": "final",
+      "deliver": "scheme"
+    }
+  ]
+}

@@ -1,0 +1,66 @@
+{
+  "id": "jintao",
+  "owner_id": "jintao",
+  "status": "on",
+  "sample": false,
+  "name": "金涛",
+  "initial": "金",
+  "tagline": "",
+  "city": "",
+  "tags": [],
+  "rating": 0,
+  "jobs": 0,
+  "week": 0,
+  "greeting": "我是金涛。",
+  "skills": [
+    {
+      "id": "glyy",
+      "label": "鼓楼医院挂号",
+      "how": "问清科室和日期，帮你挂专家号",
+      "intents": [
+        "鼓楼",
+        "挂号",
+        "挂专家",
+        "看医生",
+        "专家号"
+      ]
+    },
+    {
+      "id": "meituan_waimai",
+      "label": "美团外卖找店",
+      "how": "只送到店，登录和付钱都在美团里",
+      "intents": [
+        "外卖",
+        "点餐",
+        "美团",
+        "吃饭",
+        "附近"
+      ]
+    },
+    {
+      "id": "tuniu",
+      "label": "火车票代下单",
+      "how": "确认日期和席别后再下单，滑块时会停下来让你配合",
+      "intents": [
+        "火车票",
+        "买票",
+        "高铁",
+        "车次",
+        "出行",
+        "机票"
+      ]
+    },
+    {
+      "id": "njpkzyy",
+      "label": "浦口中医院挂号",
+      "how": "送到支付宝确认页，你自己付钱",
+      "intents": [
+        "浦口",
+        "中医院",
+        "挂号"
+      ]
+    }
+  ],
+  "experience": [],
+  "comments": []
+}

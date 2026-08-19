@@ -1,0 +1,33 @@
+{
+  "id": "glyy",
+  "name": "南京鼓楼医院互联网医院",
+  "capability": "operate_sms",
+  "capability_note": "路径 A：查科室/医生/可约日期/排班（公开，免登录）；挂号代做（持有短信 token，内置浏览器真人配合），给 pay_url，客户只确认付款。",
+  "category": "医疗",
+  "deliver": "pay_url",
+  "aliases": [
+    "鼓楼医院",
+    "鼓楼",
+    "glyy"
+  ],
+  "schema_version": "2",
+  "transport": "phone_only",
+  "ua_profile": "wechat",
+  "exec": {
+    "timeout": 25,
+    "retries": 3,
+    "retry_delay": 2
+  },
+  "error_map": {
+    "need_login": [
+      "30007",
+      "401",
+      "403",
+      "未登录",
+      "token"
+    ],
+    "param_error": [
+      "参数"
+    ]
+  }
+}

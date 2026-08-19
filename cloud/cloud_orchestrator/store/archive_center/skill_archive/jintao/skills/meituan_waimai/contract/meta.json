@@ -1,0 +1,44 @@
+{
+  "id": "meituan_waimai",
+  "name": "美团外卖",
+  "capability": "query",
+  "capability_note": "路径 B：放弃登录 + 支付。查店铺/菜单（拿 poi_id）；操作交 imeituan:// 明文 scheme，壳原生拉起美团 App 进该店点餐页，客户在 App 内自行登录、确认、付钱。不代登录、不代下单、不代支付；微信 JSAPI/小程序/卡包不交。",
+  "category": "本地生活·餐饮",
+  "deliver": "scheme",
+  "aliases": [
+    "美团外卖",
+    "点外卖",
+    "美团"
+  ],
+  "schema_version": "2",
+  "site": "探路：微信小程序（appid wxde8ac0a21135c07d）/ H5（h5.waimai.meituan.com）；交付：美团 App（scheme imeituan://，package com.sankuai.meituan）",
+  "intent": "查询：搜店铺/看菜单（探路拿 poi_id）+ 路径 B：生成美团 App 订单/点餐 scheme → 壳原生拉起美团 App 进该店点餐页 → 客户在 App 内自己登录、下单、支付（系统不持有登录态、不代付）",
+  "transport": "phone_only",
+  "ua_profile": "mobile_browser",
+  "exec": {
+    "timeout": 25,
+    "retries": 3,
+    "retry_delay": 2
+  },
+  "error_map": {},
+  "human_touch": [
+    "路径 B：客户点链接 → 美团 App 内自己登录、下单、支付（系统不代做）"
+  ],
+  "not_deliver": [
+    "登录态代做（短信/token/cookie 一律不持有）",
+    "代下单 / 代支付 / 拉起微信支付（JSAPI 必须真微信，交不了）",
+    "微信小程序 / 卡包 / URL Link / wx.requestPayment",
+    "只给美团首页的指路式链接"
+  ],
+  "notes": [
+    "三问：探路用什么=微信缓存（wxapkg）挖出去缓存的 API + H5 看店；登录态有什么=放弃（内置浏览器过不了 mtgsig 风控，真浏览器能过也不算我们能过；登录在美团 App 里）；交付是什么=imeituan:// 拉起美团 App 进该店点餐页。",
+    "来源：微信小程序 wxapkg 解包（appid wxde8ac0a21135c07d）只用于探路；微信小程序/JSAPI 不能当交付。",
+    "实测：H5 能看店/搜索/点菜，提交订单 403（mtgsig 风控）；支付锁微信 JSAPI → 虾米拉不起。故砍掉登录态和支付，改路径 B。",
+    "交付 = 明文 scheme（imeituan://www.meituan.com/takeout/food?poi_id=...），壳 Android Intent package=com.sankuai.meituan / iOS openURL。禁止丢进 WebView。未装美团才兜底应用商店。",
+    "禁止指路式：必须落到该店点餐页，禁止只给美团首页。登录/选菜/下单/支付都在美团 App 内客户自做。",
+    "scheme 路径以真机拉起为准；备选美团外卖独立 App：meituanwaimai://waimai.meituan.com/menu?poi_id_str=...（package com.sankuai.meituan.takeoutnew）。",
+    "2026-08-13 真机实测：美团外卖分享链接带 poi_id_str（字符串，如 RAaoghh37yUDcjUoIWxv8gI）；scheme meituanwaimai://waimai.meituan.com/menu?poi_id_str=... 唤起成功，登录后直达该店菜单页（不再跳登录）；到结算需客户在 App 内选菜加购（结算依赖购物车）。"
+  ],
+  "intro": "美团外卖：查店/菜单；操作只交美团 App 订单链接（路径 B）。不做登录、不下单、不代支付。",
+  "base": "https://i.waimai.meituan.com"
+}

@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import threading
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from .persist import DATA_DIR
@@ -50,9 +49,11 @@ def log_flow(device_id: str, kind: str, **payload: Any) -> None:
     line = json.dumps(entry, ensure_ascii=False) + "\n"
     with _lock:
         try:
-            (FLOWS_DIR / f"{device_id or 'unknown'}.jsonl").open("a", encoding="utf-8").write(line)
+            with (FLOWS_DIR / f"{device_id or 'unknown'}.jsonl").open("a", encoding="utf-8") as f:
+                f.write(line)
             all_path = FLOWS_DIR / "_all.jsonl"
-            all_path.open("a", encoding="utf-8").write(line)
+            with all_path.open("a", encoding="utf-8") as f:
+                f.write(line)
             if all_path.stat().st_size > _ALL_MAX_BYTES:
                 data = all_path.read_bytes()
                 all_path.write_bytes(data[len(data) // 2:])

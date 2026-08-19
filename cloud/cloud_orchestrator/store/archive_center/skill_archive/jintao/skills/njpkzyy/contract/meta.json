@@ -1,0 +1,46 @@
+{
+  "id": "njpkzyy",
+  "name": "南京市浦口区中医院挂号",
+  "capability": "query",
+  "capability_note": "路径 B：查科室/医生/午别/排班/可约日期/在线号/支付渠道（公开接口，普通 UA + 签名可访问）；操作交 alipays:// 拉起支付宝进挂号确认页，客户自己登录、确认、支付。不代做微信授权，不代挂号。",
+  "category": "医疗",
+  "deliver": "scheme",
+  "aliases": [
+    "浦口中医院",
+    "南京市浦口区中医院",
+    "pkqzyy"
+  ],
+  "schema_version": "2",
+  "site": "公开后端 hzfw.njpkzyy.com:18086（公开 API）+ 支付宝小程序「南京市浦口区中医院挂号缴费」（appId 2021002127607132）+ 微信小程序（appid wxca05bc9d9f69226c）",
+  "intent": "查询：查科室/医生/排班/可约日期/支付渠道（公开接口，走手机通道）+ 支付宝直达链接：客户点链接 → 唤起支付宝 → 直达挂号确认页 → 客户在支付宝内自己确认挂号并支付（系统不做登录/支付代做）",
+  "transport": "phone_only",
+  "ua_profile": "default",
+  "exec": {
+    "timeout": 25,
+    "retries": 3,
+    "retry_delay": 2
+  },
+  "error_map": {
+    "param_error": [
+      "参数"
+    ]
+  },
+  "human_touch": [
+    "支付宝直达：客户点链接 → 支付宝 App 内确认挂号并支付（系统不代做登录/支付）"
+  ],
+  "not_deliver": [
+    "登录态代做（挂号登录绑客户自己的支付宝账号，系统不代做）",
+    "挂号/下单代做（需客户支付宝登录态，系统拿不到）",
+    "支付代做/拉起（支付宝环境内客户自做）",
+    "指路式交付（只给入口/链接让客户从头操作）——禁止（交付铁律）；支付宝直达挂号确认页不算指路，但确认/支付动作客户自做"
+  ],
+  "notes": [
+    "2026-08-19 查询改走手机通道（蓝图 + sha1_md5 占位符，禁云端 requests）；深链仍是支付宝 scheme 直达，不做登录/支付代做。",
+    "① 后端 hzfw.njpkzyy.com:18086 公开 HTTP API（普通 UA 可访问），需 agent_id/appKey/sign 头；sign=SHA1(MD5(appKey+ts+nonce))，appKey=1202patient；agent_id 普通=6396cb2be4b0dc1899f48fe7、在线号=62da65d4e4b0e0a247890d84。",
+    "② 支付宝端：小程序「南京市浦口区中医院挂号缴费」，appId=2021002127607132，挂号确认页=pages/public/bookingConfirm/bookingConfirm?__appxPageId=11（来自分享链接解码）。",
+    "③ 微信端存在（appid wxca05bc9d9f69226c，后端同 hzfw.njpkzyy.com:18086），但微信直达需 appsecret（管理员）→ 不做；支付宝直达无需密钥 → 采用支付宝。",
+    "④ 登录=客户自己的支付宝账号（支付宝环境内完成），支付=支付宝环境内自做（系统不代做登录/支付）。",
+    "⑤ 交付 = 查询（公开）+ 支付宝直达链接（scheme + https，客户点开进支付宝 App 直达挂号确认页，自行确认并支付）。",
+    "⑥ 禁止指路式交付（交付铁律）；支付宝直达挂号确认页不算指路，但确认/支付动作客户自做。"
+  ]
+}

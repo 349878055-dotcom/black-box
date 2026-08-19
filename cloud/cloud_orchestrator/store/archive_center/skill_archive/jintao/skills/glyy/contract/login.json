@@ -1,0 +1,40 @@
+{
+  "login": {
+    "method": "sms_verify",
+    "display": "南京鼓楼医院互联网医院",
+    "steps": {
+      "captcha": {
+        "method": "get_graphical_captcha",
+        "params": {
+          "phone": "{phone}"
+        },
+        "image_field": "image_base64"
+      },
+      "send_sms": {
+        "method": "send_sms",
+        "params": {
+          "phone": "{phone}",
+          "gcode": "{captcha_code}"
+        }
+      },
+      "login": {
+        "method": "login",
+        "params": {
+          "phone": "{phone}",
+          "code": "{sms_code}"
+        }
+      }
+    },
+    "interact": {
+      "phone": "请输入手机号，完成鼓楼医院登录",
+      "captcha_image": "请输入图形验证码（看上方图片里的字符；看不清可点「换一张」）",
+      "sms_code": "短信已发送，请输入收到的验证码"
+    }
+  },
+  "auth": {
+    "required": true,
+    "kind": "bearer",
+    "how": "短信验证码登录，Bearer token 存手机凭据库",
+    "how_to_get": "login 成功后手机自动存 token"
+  }
+}

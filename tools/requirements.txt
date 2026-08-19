@@ -1,0 +1,4 @@
+# tools/ 运维脚本依赖（部署、远端检查、验证等）
+# 云端运行不需要这些；仅在开发者本机执行 tools/ 脚本时安装：
+#   pip install -r tools/requirements.txt
+pexpect

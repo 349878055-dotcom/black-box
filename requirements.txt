@@ -1,15 +1,21 @@
 # 虾米 · 个人助手 — 云端编排依赖
 # 本项目 = 手机端 + 云端编排（仅执行 skill，不做探索 / browser-use）
+# 运维脚本（tools/）依赖见 tools/requirements.txt
 
 # ── 云端编排 (cloud_orchestrator/) ──
 fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
 httpx>=0.25.0
-sse-starlette>=1.8.0
-python-multipart>=0.0.9
-Pillow
+requests>=2.31.0
+# 注：上传/图片审核功能暂未启用；恢复时需补 python-multipart、Pillow
+
+# ── Agent 调度（LangGraph ReAct；业务仍在 adapters / agent._run_tool）──
+langgraph>=1.0.0
+langchain-openai>=0.3.0
+langchain-core>=0.3.0
 
 # ── 向量检索（retrieval/：小纸条机制，本地 BGE 中文向量，零网络）──
 # 安装：pip install --user --break-system-packages sentence-transformers
 # 模型：cloud/models/bge-small-zh-v1.5（已下载，离线可用）
 sentence-transformers
+numpy

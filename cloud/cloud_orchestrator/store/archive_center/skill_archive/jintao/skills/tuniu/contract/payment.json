@@ -1,0 +1,8 @@
+{
+  "payment": {
+    "kind": "pay_url",
+    "source": "pay",
+    "field": "pay_url",
+    "open": "navigate"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "login": {
+    "method": "browser",
+    "display": "途牛旅游",
+    "url": "https://m.tuniu.com/u/login",
+    "clear_cookies": true,
+    "export": {
+      "cmd": "export_cookies",
+      "domain": "https://m.tuniu.com",
+      "skill": "tuniu"
+    },
+    "interact": {
+      "guide": "已在内置浏览器打开途牛登录页：\n1. 输入手机号\n2. 拖动滑块通过人机验证\n3. 输入短信验证码完成登录\n完成后回复「已登录」，我会自动保存登录态继续下单。"
+    }
+  },
+  "auth": {
+    "required": true,
+    "kind": "cookie",
+    "how": "内置浏览器真人登录，cookie 存手机",
+    "how_to_get": "登录后 export_cookies"
+  }
+}

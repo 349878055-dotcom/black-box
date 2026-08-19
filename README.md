@@ -1,122 +1,68 @@
-# 个人助理5 · skill 消费版（API 优先 · 微信小程序方向）
+# 个人助理5 · 虾米
 
-> **放弃模拟点击（UI 自动化），全面转向「消费 skill = 平台逆向 API」模式。**
-> 当前主攻方向：**微信小程序逆向** —— 把常用微信小程序（医院挂号、出行购票…）
-> 背后的真实 HTTP 接口封装成 skill，主代理（AI）直接 requests 直调拿数据，
-> 不再驱动浏览器去点/填/等。
-
-## 本仓库只「消费 skill」，不制作 skill
-
-- **skill 的制作**（逆向/解包/抓包/自测/发布）由**专门项目 `Skill工作台`** 负责：
-  - 方法论文档：`Skill工作台/docs/微信小程序批量逆向方法论.md`（解包 wxapkg → 挖接口 → 抓登录态 → 规范化）
-  - 工具：`Skill工作台/tools/unpack_wxapkg.py`（wxapkg 解包）
-  - 制作产物：`Skill工作台/skill_maker/sites/{id}/`（contract.json + api.py + session.py）
-- 本仓库（个人助理5）只负责**注册 + 执行**：`adapters/registry.py` 注册，主代理 `skill_run` 执行；
-- 每个 skill = 一个平台逆向 API 类（session 保持登录态，返回结构化 dict/list，AI 可直接读）。
-
-## 已接入的 skill（2026-08-06 更新）
-
-| skill | 平台 | 方法数 | 说明 |
-|---|---|---|---|
-| `glyy` | 南京鼓楼医院互联网医院（微信小程序） | 26 | 挂号全链路 + 报告/缴费/处方/病历/复诊/在线咨询（Bearer token） |
-| `tuniu` | 途牛（官方 MCP + 官网/小程序） | 10 + 8 | MCP 查票 + 官网查车次/下单/订单/取消（cookies + sessionId） |
-
-每个 skill 的完整能力（`flow` 分层业务地图 + `methods` 方法表）用 `skill_list` 查看。
-
-## 核心架构
+手机只执行 JSON 蓝图；云端只编排；Skill 只声明并组蓝图。云端不直连平台，证件和登录态只留手机，不代付。
 
 ```
-手机 App（对话 + 内置浏览器：只用于登录/验证码/看页面配合 + 导出登录态）
-      │  HTTP + WS
-云端（主代理）
-  ├─ 主代理（LLM：理解用户 → skill_list 找 skill → skill_run 执行 → ask_user 交互 → 汇报）
-  ├─ skill 注册表 adapters/registry.py   ← 每个 skill 一个 *_api.py
-  │    ├─ glyy_api.py        ← 南京鼓楼医院（微信小程序逆向）
-  │    └─ tuniu_api.py       ← 途牛（MCP + 官网/小程序，含 TuniuWebAPI）
-  ├─ 个人资料中心（账号/就诊人/收货地址…自动带入）
-  └─ 用户资料/历史存储
+客户说话
+  → 云端 Agent 按契约点菜（search / read_skill / skill_run / ask_user / 登录 / 支付交付）
+  → Skill 组请求蓝图（不直连平台）
+  → 手机补凭据、签名，用真实 IP 打平台
+  → 统一餐盒 {ok, data, error, need_login} 回云端
 ```
 
-## 主代理工具
+本仓库只**消费** skill。制作（抓包/逆向/自测）在独立项目 Skill 工作台；交过来的包挂在 `skill_archive/<人>/skills/<id>/`。
 
-| 工具 | 作用 |
-|---|---|
-| `skill_list` | 列出已接入的 skill（平台逆向 API）及可用方法（含是否需要登录） |
-| `skill_run` | 执行 skill 方法办理业务（skill=平台，method=方法，params=参数） |
-| `ask_user` | 向用户提问/收集信息（验证码、手机号、确认等） |
-| `web_search` | 博查联网搜索通用信息（新闻/政策/电话） |
-| `done` | 办理完成，汇报结果 |
+Skill 接入约定：[`plans/contract-v2-接口说明.md`](plans/contract-v2-接口说明.md)  
+引擎怎么消费：[`plans/contract-v2-内部实现.md`](plans/contract-v2-内部实现.md)  
+目录索引（按问题跳文件）：[`INDEX.md`](INDEX.md)
 
-> `skill_run` 支持 `web_*` 前缀方法：走同一平台的第二套实现（如途牛官网 `TuniuWebAPI`）。
+## 已接入（金涛名下）
 
-## 向量检索「小纸条」机制（retrieval/）
+| skill | 平台 | 能力 | 登录 | 交付 |
+|---|---|---|---|---|
+| `glyy` | 鼓楼医院互联网医院 | 查科室/排班 + 代挂号 | `sms_verify`（图形码+短信 → Bearer token 存手机） | `pay_url` |
+| `tuniu` | 途牛 | MCP 查票 + M 站代下单 | 查询用 `config.json` 的 `skills.tuniu.api_key`；下单走 `browser` 导出 cookie | `pay_url` |
+| `meituan_waimai` | 美团外卖 | 查店/菜单，不代登录下单 | 无（客户在美团 App 里自己登） | `imeituan://` scheme |
+| `njpkzyy` | 浦口中医院 | 查科室/排班，不代挂号 | 无（客户在支付宝里自己登） | `alipays://` scheme |
 
-skill 越来越多后，不再把全部方法塞给 AI，而是**两级按需召回**：
+登录哪条路通走哪条（`sms_verify` / `browser`），不强制一律浏览器。微信授权不当客户交付。
 
-- **平台级检索**：客户一句话 → 本地 BGE 向量（中文，云端本机跑，零网络）→ 方法级聚合成 top-1 平台
-- **功能级检索**：在该平台内选出最相关方法 2~4 个
-- **小纸条**：只把「当前平台 + 当前功能方法 + 流程地图 + 备选平台」注入 LLM，AI 只在小纸条里选
-- **会话锁定 + 防抖**：同一话题沿用当前平台；连续 2 次检索指向别的平台才切换（客户一句话没说完不乱跳）
-- **降级**：模型不可用时自动回退到旧 `skill_list` 全量模式
+## 对话工具（代码里实际挂的）
 
-依赖：`sentence-transformers`；模型已下载到 `cloud/models/bge-small-zh-v1.5`（离线可用）。
-新增 skill 后自动纳入索引（`retrieval/register.py` 重建）。
+雇了才艺人（会话挂了上台卡）才能办事。闲聊对话不能 `skill_run`。
 
-## 微信小程序逆向 → skill 流程（速览）
+| 工具 | 谁能用 | 作用 |
+|---|---|---|
+| `search` | 都有 | `scope=skill` 搜名下才艺/方法（向量或关键词，top-3）；`scope=web` 博查公开信息。**没有 `skill_list`。** |
+| `read_skill` | 雇人后 | 精读某 skill 契约（方法/参数/登录/表单还缺什么/边界） |
+| `skill_run` | 雇人后 | 执行方法；`requires` 自动补编码；`need_login` 则走 `login_flow` 后只重试这一步 |
+| `ask_user` | 都有 | 问客户；可带图（图形码）和选项按钮 |
+| `update_step` | 雇人后 | 多步任务进度，落在会话上 |
+| `done` | 都有 | 收尾 |
 
-1. **定位小程序**：电脑微信缓存 `~/.xwechat/radium/Applet/packages/{appid}/` 找目标 wxapkg
-2. **解包**：`python3 tools/unpack_wxapkg.py __APP__.wxapkg --out /tmp/xxx` → 拿到 `app-service.js`（明文业务代码）
-3. **挖接口**：从 JS 搜接口路径 / 登录机制 / 签名算法 → 形成接口字典
-4. **登录态 + 抓包**：mitmproxy 抓真实请求 → 拿 token / cookies / sessionId（验证码/短信真人配合一次）
-5. **规范化**：写 `sites/{id}/`（contract.json + api.py + session.py）→ 注册进 `registry.py`
+检索失败直接报错，**不降级**成全量方法列表。
 
-## 启动云端（本地测试）
+## 登录态
+
+只存手机 `CredentialStore`（按邮箱+skill 隔离，Keystore 加密）。云端不持 token/cookie。
+
+| skill | 形式 | 怎么拿到 |
+|---|---|---|
+| glyy | Bearer token | 短信 API：图形码最多换 3 次 → 短信码 → 蓝图 `store` 写入手机 |
+| tuniu 下单 | cookie | 内置浏览器打开登录页 → 真人滑块+短信 → `export_cookies` |
+| tuniu 查询 | api_key | 云端 `config.json` → `skills.tuniu.api_key`，请求时由手机占位符填 |
+| 美团 / 浦口 | 无 | 不代登；scheme 拉起对方 App |
+
+## 启动
 
 ```bash
-cd 个人助理5 && PYTHONPATH=. python -m cloud.cloud_orchestrator.main   # :19000
+# 云端（默认 :19000；手机直连腾讯云，不要拿本机当代理）
+cd 个人助理5 && PYTHONPATH=. python -m cloud.cloud_orchestrator.main
+
+# App
+cd app/project && ./gradlew :app:assembleDebug
 ```
 
-## 目录结构
+配置：`cloud/config.json`（不入库）—— LLM、JWT、博查、`skills.<id>.api_key`。
 
-```
-cloud/cloud_orchestrator/
-  main.py            FastAPI 入口（/health /api/v1/chat /api/v1/task /api/v1/ws …）
-  core/              主代理（agent.py：LLM + skill 工具循环；master.py：后台任务）
-  adapters/          skill 注册表（registry.py）+ 平台逆向 API（*_api.py）
-  channel/           WS 通道（App 连接；ask_user 交互 + 浏览器人工配合）
-  store/             用户资料 / 流程日志持久化
-  api/               HTTP 路由
-
-app/                 Android 手机端（对话 UI + 内置浏览器 + 导出登录态）
-```
-
-## 登录态（是什么 + 每个 skill 从哪来）
-
-**登录态 = 请求时带的"门禁卡"**：每次请求带着它，网站才知道是你。
-卡的样式可能是 token / cookie / sessionId（本质一样，只是放的位置/样式不同）：
-- **Token**：请求头 `Authorization: Bearer xxx`（如鼓楼医院）
-- **Cookie**：请求自动带 `session=xxx`（如途牛网页版）
-- **sessionId**：请求参数带 `sid=xxx`（如途牛小程序）
-
-**关键**：微信小程序（鼓楼医院、途牛）的登录态在微信私有通道里，**内置浏览器导出拿不到**。各 skill 登录态正确来源如下：
-
-> 📌 **登录态说明是每个 skill 的固定栏目**：未来新增 skill 必须在制作端 `contract.json` 的 `auth.how_to_get` 里写明「①形式 ②从哪来 ③要不要人配合」，拖到本仓库后补进下表——缺登录态说明的 skill 视为不完整，不能上线。
-
-| skill | 登录态形式 | 从哪来（正确来源） | 要内置浏览器吗 | 现状 |
-|---|---|---|---|---|
-| glyy 鼓楼医院 | Bearer token | **内置浏览器自助登录**（2026-08-08 改）：自动弹内置浏览器打开 `https://www.ih.njglyy.com`（微信 UA）→ 客户自己输手机号+短信码登录 → 自动 `export_token` 导出 token 存手机凭据库 | ✅ 需要（微信 UA） | ✅ 已改造，待手机实测 |
-| tuniu 查询 | apiKey | **config.json 配置**（`tuniu.api_key`） | ❌ 不需要 | ✅ 已配置，查询可用 |
-| tuniu 下单 | cookies + sessionId | **网页版**：App 内置浏览器登录 → 导出 cookies；**小程序**：抓包拿 sessionId | ⚠️ 网页版可，小程序不行 | 🔄 需重新获取一次 |
-
-> 说明（2026-08-08 用户铁令）：**所有平台登录统一改为「弹内置浏览器 → 客户自己登录 → 自动导出登录态存手机」**，
-> 废弃 glyy 旧的「云端 ask_user 一步步问手机号/图形验证码/短信码」方式。
-> glyy 登录页 `https://www.ih.njglyy.com` 必需微信 UA（navigate 传 `ua=wechat`）；登录后云端下发 `export_token`
-> 命令，手机端从浏览器 localStorage/cookie 读 Bearer token 存 `CredentialStore token_glyy`，后续请求自动补
-> `Authorization: Bearer`。途牛下单同理念（网页版导出 cookie）。
-
-## 登录态文件（持久化于 data/sessions/，云端重启不丢）
-
-| skill | 登录态文件 | 获取方式 |
-|---|---|---|
-| glyy | `cloud/cloud_orchestrator/data/sessions/glyy_session.json` | 手机号+短信验证码登录（glyy_api.get_graphical_captcha → send_sms → login）；验证码图片通过 WS 推送到 App 聊天窗口显示，用户看图输入 |
-| tuniu | `cloud/cloud_orchestrator/data/sessions/tuniu_web_session.json` | App「导出登录态」/ 抓包 → `TuniuWebAPI.save_session()` 保存；重启自动加载 |
+文件往哪找：[`INDEX.md`](INDEX.md)。手机能力声明：[`app/src/core/README.txt`](app/src/core/README.txt)。

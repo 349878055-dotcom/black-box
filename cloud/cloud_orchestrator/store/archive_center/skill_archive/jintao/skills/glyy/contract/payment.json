@@ -1,0 +1,8 @@
+{
+  "payment": {
+    "kind": "pay_url",
+    "source": "medical_pay",
+    "field": "pay_url",
+    "open": "navigate"
+  }
+}

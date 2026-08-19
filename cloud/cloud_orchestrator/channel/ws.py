@@ -4,8 +4,9 @@ SessionExecutor — WebSocket 执行通道（统一主脑后简化版）。
 职责（v2 平台化 / Device-as-Proxy）：
   - WS 连接建立 → 按 device_id 注册到 DeviceBridge
   - MasterAgent 经 bridge 与客户端交互：ask_user 推送问题 + 等用户输入；
-    浏览器指令（navigate/click/fill/read/...）为 App 内置浏览器预留
-    （登录/验证码/看页面时人工配合用，主代理不主动驱动）
+    浏览器指令仅剩登录用：navigate 打开登录页 / clear_cookies / export_cookies /
+    export_token / check_ready（真人登录人工配合；主代理不驱动其他浏览器遥控；
+    支付只回产物链接/scheme，由客户端系统浏览器打开）
   - skill 执行通道：云端下发「请求蓝图」skill_request → 手机直连平台 →
     回传原始响应 skill_result（第 1 条改造：WS 协议扩展）
   - 收 result → 喂 _pending_result；收 user_input → 喂 _pending_user_input
@@ -15,7 +16,6 @@ import asyncio
 import json
 import logging
 import uuid
-from typing import Any
 
 from fastapi import WebSocket
 
@@ -34,8 +34,6 @@ class SessionExecutor:
         self._running = True
         # 等待客户端返回结果的 Future（指令回执）
         self._pending_result: asyncio.Future | None = None
-        # 等待用户文字输入的 Future（ask_user 暂停-恢复）
-        self._pending_user_input: asyncio.Future | None = None
         # skill 执行通道：req_id → Future（可并发多个 skill_request）
         self._pending_skill: dict[str, asyncio.Future] = {}
 
@@ -65,16 +63,23 @@ class SessionExecutor:
                 from .bridge import bridge
 
                 self.device_id = device_id
-                bridge.register(device_id, self._send_and_wait, self._wait_user_input,
-                                self.send_skill_request)
+                bridge.register(device_id, self._send_and_wait,
+                                self.send_skill_request, self.send_push)
 
         elif msg_type == "result":
             if self._pending_result and not self._pending_result.done():
                 self._pending_result.set_result(data)
 
         elif msg_type == "user_input":
-            if self._pending_user_input and not self._pending_user_input.done():
-                self._pending_user_input.set_result(data.get("value", ""))
+            value = str(data.get("value", "") or "")
+            ask_id = str(data.get("ask_id") or msg.get("ask_id") or "")
+            # 铁律（2026-08-16）：回答只走 feed_answer，不保留兜底旧逻辑——
+            # 兜底会掩盖 ask_id 回答路由的问题。匹配失败/无等待 → 明确记录。
+            from ..core.master import feed_answer
+            if not feed_answer(self.device_id or "", ask_id, value):
+                logger.warning("[executor] user_input 无匹配的等待任务（可能无 ask 或 ask_id 过期）"
+                               " device=%s ask_id=%s value=%s",
+                               self.device_id, ask_id, str(value)[:40])
 
         elif msg_type == "user_action":
             self.session.context["last_user_action"] = data
@@ -101,6 +106,7 @@ class SessionExecutor:
                 logger.warning("[executor] skill_result 无匹配 req_id=%s", req_id)
 
         elif msg_type == "ping":
+            logger.debug("[executor] ping from device=%s", self.device_id)
             await self._send({"cmd": "pong", "params": {}})
 
         else:
@@ -114,9 +120,13 @@ class SessionExecutor:
             except Exception:
                 self._running = False
 
+    async def send_push(self, cmd: str, params: dict) -> None:
+        """只发不等回执（task_update 等实时通知），供 DeviceBridge.send_push 调用。"""
+        await self._send({"cmd": cmd, "params": params})
+
     async def _send_and_wait(self, cmd: str, params: dict) -> dict:
         """发送指令并等待客户端返回 result（供 DeviceBridge / 工具驱动使用）"""
-        self._pending_result = asyncio.get_event_loop().create_future()
+        self._pending_result = asyncio.get_running_loop().create_future()
         await self._send({"cmd": cmd, "params": params})
         try:
             result = await asyncio.wait_for(self._pending_result, timeout=120)
@@ -137,7 +147,10 @@ class SessionExecutor:
             },
             "credential": {     # 本地凭据提示
               "kind": "bearer|cookie", "target": "glyy|tuniu"
-            }
+            },
+            "store": {...},        # 登录成功后手机写入凭据库（必须透传）
+            "auto_refresh": bool,  # token 静默续期（必须透传）
+            "login": {...},
           }
         手机执行后回 skill_result：{req_id, ok, status, headers, body, error}
         """
@@ -151,10 +164,23 @@ class SessionExecutor:
             # 方案②：登录配置随蓝图下发（手机端 LoginCoordinator 据此检测登录信号并接管登录）
             "login": payload.get("login") or {},
         }
+        # 登录回写 / 静默续期：整份透传，否则手机 SkillExecutor 存不上 token
+        if payload.get("store") is not None:
+            msg["store"] = payload.get("store")
+        if "auto_refresh" in payload:
+            msg["auto_refresh"] = bool(payload.get("auto_refresh"))
+        # 续期接口配置随蓝图透传（skill 下发，App 只执行）
+        if payload.get("refresh") is not None:
+            msg["refresh"] = payload.get("refresh")
+        # 响应裁剪 / 资料卡选卡：随蓝图透传（App 按配置裁剪响应、选资料卡）
+        if payload.get("response") is not None:
+            msg["response"] = payload.get("response")
+        if payload.get("profile_card"):
+            msg["profile_card"] = str(payload.get("profile_card"))
         logger.info("[executor] 下发 skill_request req=%s skill=%s url=%s",
                     req_id, msg["skill"],
                     str(msg["request"].get("url", ""))[:80])
-        fut = asyncio.get_event_loop().create_future()
+        fut = asyncio.get_running_loop().create_future()
         self._pending_skill[req_id] = fut
         await self._send(msg)
         try:
@@ -165,16 +191,6 @@ class SessionExecutor:
                     "req_id": req_id}
         finally:
             self._pending_skill.pop(req_id, None)
-
-    async def _wait_user_input(self, timeout: float = 600) -> str | None:
-        """阻塞等待用户在客户端输入文字（ask_user 暂停-恢复）。"""
-        self._pending_user_input = asyncio.get_event_loop().create_future()
-        try:
-            return await asyncio.wait_for(self._pending_user_input, timeout=timeout)
-        except asyncio.TimeoutError:
-            return None
-        finally:
-            self._pending_user_input = None
 
     def _cleanup(self):
         """清理资源：注销设备通道、销毁会话"""

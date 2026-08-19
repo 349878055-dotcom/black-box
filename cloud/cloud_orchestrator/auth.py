@@ -9,29 +9,50 @@
 """
 import hashlib
 import hmac
+import logging
 import time
+from urllib.parse import quote, unquote
+
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
 from .config import get
 from .store.refresh_tokens import refresh_store
 
+logger = logging.getLogger("xiami.auth")
+
 ACCESS_TTL = 2 * 3600          # Access 有效期 2 小时
 REFRESH_TTL = 30 * 86400       # Refresh 有效期 30 天
 
+# 内置默认密钥：仅限开发环境；已配置真实密钥时置空。生产必须配置 cloud/config.json 的 auth.api_key
+_DEFAULT_SECRET = "xiamiaban-default-secret"
+_warned_default_secret = False
+
 
 def _secret() -> str:
-    return get("jwt_secret", "") or "xiamiaban-default-secret"
+    global _warned_default_secret
+    s = get("jwt_secret", "") or _DEFAULT_SECRET
+    if s == _DEFAULT_SECRET and not _warned_default_secret:
+        _warned_default_secret = True
+        logger.warning(
+            "jwt_secret 未配置，正在使用内置默认密钥（不安全）——"
+            "生产环境必须配置 cloud/config.json 的 auth.api_key，否则 Access Token 可被伪造"
+        )
+    return s
 
 
 def _sign(payload: str) -> str:
-    return hmac.new(_secret().encode(), payload.encode(), hashlib.sha256).hexdigest()[:16]
+    # 完整 SHA-256 摘要（64 hex = 256 bit），不再截断到 16 hex（64 bit 碰撞空间太小）
+    return hmac.new(_secret().encode(), payload.encode(), hashlib.sha256).hexdigest()
 
 
 def create_access_token(email: str, user_id: str = "") -> str:
-    """生成 Access Token（HMAC 签名，无状态）。"""
+    """生成 Access Token（HMAC 签名，无状态）。
+
+    email/uid 用 URL 编码放入 payload，避免 email 含 & 或 = 时破坏 & 分隔的字段解析。
+    """
     payload = (
-        f"email={email}&uid={user_id}"
+        f"email={quote(str(email), safe='')}&uid={quote(str(user_id), safe='')}"
         f"&ts={int(time.time())}&exp={int(time.time()) + ACCESS_TTL}"
     )
     return f"{payload}&sig={_sign(payload)}"
@@ -54,7 +75,10 @@ def verify_token(token: str) -> dict | None:
         exp = int(params.get("exp", 0))
         if time.time() > exp:
             return None
-        return {"email": params.get("email", ""), "user_id": params.get("uid", "")}
+        return {
+            "email": unquote(params.get("email", "")),
+            "user_id": unquote(params.get("uid", "")),
+        }
     except Exception:
         return None
 
@@ -111,10 +135,6 @@ async def auth_middleware(request: Request, call_next):
         request.url.path == "/api/v1/cards"
         or request.url.path.startswith("/api/v1/cards/")
     ):
-        return await call_next(request)
-
-    # 静态资源（测试壳子 phone_test_shell.html 等）无需认证
-    if request.url.path.startswith("/static"):
         return await call_next(request)
 
     if not get("auth_enabled", True):

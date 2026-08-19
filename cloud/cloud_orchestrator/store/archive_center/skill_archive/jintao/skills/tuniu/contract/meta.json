@@ -1,0 +1,38 @@
+{
+  "id": "tuniu",
+  "name": "途牛（查：MCP 查询；买：M 站下单+支付）",
+  "capability": "operate",
+  "capability_note": "路径 A：MCP 查票免登录；M 站代下单（cookie，滑块真人；下单前先 train_booking_info / resolve_city_code）；下完单再 alipays:// 去付钱。这是 A，不是 B。",
+  "category": "出行",
+  "deliver": "pay_url",
+  "aliases": [
+    "途牛",
+    "tuniu",
+    "火车票"
+  ],
+  "schema_version": "2",
+  "transport": "phone_only",
+  "ua_profile": "mobile_browser",
+  "exec": {
+    "timeout": 25,
+    "retries": 3,
+    "retry_delay": 2
+  },
+  "error_map": {
+    "need_login": [
+      "未登录",
+      "登录",
+      "401"
+    ],
+    "param_error": [
+      "170001"
+    ],
+    "duplicate_order": [
+      "已有相同订单",
+      "正在处理"
+    ],
+    "manual": [
+      "711001"
+    ]
+  }
+}

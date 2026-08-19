@@ -1,0 +1,11 @@
+{
+  "payment": {
+    "kind": "scheme",
+    "source": "generate_order_link",
+    "field": "scheme",
+    "schemes": [
+      "imeituan://",
+      "meituanwaimai://"
+    ]
+  }
+}

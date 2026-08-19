@@ -1,0 +1,177 @@
+{
+  "methods": [
+    {
+      "name": "homepage",
+      "desc": "首页店铺列表（选择源）→ wx-shangou.meituan.com/wxapp/v2/poi/homepage。返回含 poi_id 的店铺列表。先调本方法拿候选店铺，再 ask_user 让客户从候选里选店，把选中的 poi_id 填进 generate_order_link",
+      "need_login": false,
+      "params": {},
+      "customer_input": [],
+      "keywords": [
+        "首页",
+        "附近店铺",
+        "有什么店"
+      ],
+      "provides": {
+        "poi_id": {
+          "desc": "店铺 id，供 get_poi_info/get_product_list/generate_order_link 使用",
+          "used_by": [
+            "get_poi_info",
+            "get_product_list",
+            "generate_order_link"
+          ]
+        }
+      },
+      "success_ret": "",
+      "error_ret": "",
+      "system_only": false,
+      "stage": "final",
+      "deliver": "query"
+    },
+    {
+      "name": "search_poi",
+      "desc": "搜店铺（选择源）→ wx-shangou.meituan.com/wxapp/v2/search/v9/poiwithfilter（search 系可能 403，可改用 homepage）。返回 [{poi_id, name, ...}]。先调本方法拿候选店铺，再 ask_user 让客户从候选里选店，把选中的 poi_id 填进 get_poi_info/get_product_list/generate_order_link。keyword 为客户提供的店名/搜索词，客户没说想吃哪家时先 ask_user 问",
+      "need_login": false,
+      "params": {
+        "keyword": "店铺名/搜索词",
+        "city_id": "城市id（待验证）",
+        "lng": "经度（待验证）",
+        "lat": "纬度（待验证）"
+      },
+      "customer_input": [
+        "keyword"
+      ],
+      "keywords": [
+        "搜店铺",
+        "找外卖",
+        "点外卖",
+        "附近有什么吃的"
+      ],
+      "provides": {
+        "poi_id": {
+          "desc": "店铺 id，供 get_poi_info/get_product_list/generate_order_link 使用",
+          "used_by": [
+            "get_poi_info",
+            "get_product_list",
+            "generate_order_link"
+          ]
+        }
+      },
+      "success_ret": "店铺列表",
+      "error_ret": "",
+      "system_only": false,
+      "stage": "final",
+      "deliver": "query"
+    },
+    {
+      "name": "get_poi_info",
+      "desc": "店铺信息 → /wxapp/v1/poi/info。返回店铺详情/营业状态等",
+      "need_login": false,
+      "params": {
+        "poi_id": "店铺 id"
+      },
+      "customer_input": [],
+      "keywords": [
+        "店铺信息",
+        "这家店怎么样"
+      ],
+      "requires": [
+        {
+          "param": "poi_id",
+          "from": "search_poi",
+          "field": "poi_id",
+          "note": "先 search_poi 用店铺名匹配拿到真实 poi_id，禁止编造"
+        }
+      ],
+      "success_ret": "",
+      "error_ret": "",
+      "system_only": false,
+      "stage": "final",
+      "deliver": "query"
+    },
+    {
+      "name": "get_product_list",
+      "desc": "店铺菜单/菜品列表 → /wxapp/v1/poi/food。返回菜品 [{product_id, name, price, ...}]",
+      "need_login": false,
+      "params": {
+        "poi_id": "店铺 id"
+      },
+      "customer_input": [],
+      "keywords": [
+        "菜单",
+        "这家店有什么菜",
+        "看菜单"
+      ],
+      "requires": [
+        {
+          "param": "poi_id",
+          "from": "search_poi",
+          "field": "poi_id",
+          "note": "先 search_poi 拿真实 poi_id"
+        }
+      ],
+      "success_ret": "",
+      "error_ret": "",
+      "system_only": false,
+      "stage": "final",
+      "deliver": "query"
+    },
+    {
+      "name": "get_product_detail",
+      "desc": "菜品详情 → /weapp/v7/poi/product/detail。返回菜品规格/价格/库存",
+      "need_login": false,
+      "params": {
+        "product_id": "菜品 id",
+        "poi_id": "店铺 id"
+      },
+      "customer_input": [],
+      "keywords": [
+        "菜品详情",
+        "这个菜多少钱",
+        "菜品规格"
+      ],
+      "requires": [
+        {
+          "param": "product_id",
+          "from": "get_product_list",
+          "field": "product_id",
+          "note": "先 get_product_list 拿真实 product_id"
+        }
+      ],
+      "success_ret": "",
+      "error_ret": "",
+      "system_only": false,
+      "stage": "final",
+      "deliver": "query"
+    },
+    {
+      "name": "generate_order_link",
+      "desc": "路径 B：生成美团 App 订单/点餐 scheme → 壳原生拉起美团 App 进该店点餐页。客户在 App 内自行登录、下单、支付。系统不持有登录态、不代付。",
+      "need_login": false,
+      "params": {
+        "poi_id": "店铺 id（先 search_poi / homepage 拿真实 id，禁止编造）"
+      },
+      "customer_input": [],
+      "keywords": [
+        "下单",
+        "点这个",
+        "帮我点一份",
+        "订单链接",
+        "拉起美团",
+        "去美团点"
+      ],
+      "requires": [
+        {
+          "param": "poi_id",
+          "from": "search_poi",
+          "field": "poi_id",
+          "note": "先 search_poi/homepage 拿候选店铺 → ask_user 让客户从候选里选店 → 取真实 poi_id；禁止编造"
+        }
+      ],
+      "success_ret": "{\"ok\": true, \"scheme\": \"imeituan://www.meituan.com/takeout/food?poi_id=...\", \"package\": \"com.sankuai.meituan\"}",
+      "error_ret": "",
+      "system_only": false,
+      "stage": "final",
+      "deliver": "scheme"
+    }
+  ]
+}
