@@ -138,20 +138,20 @@ async def chat(request: Request, body: ChatRequest):
     msg = (body.message or "").strip()
     from ..core.master import master
 
-    # 契约（问题13）：HTTP 侧 device_id = 登录 email；前端连 /api/v1/ws 时必须用同一 email
-    # 作为 device_id 注册（session_ready），否则 bridge 找不到设备，skill_run / ask_user 推送会失败。
-    device_id = _my_email(request) or "anon"
+    # 契约（问题13）：HTTP 侧 email = 登录 email；前端连 /api/v1/ws 时必须用同一 email
+    # 作为 email 注册（session_ready），否则 bridge 找不到设备，skill_run / ask_user 推送会失败。
+    email = _my_email(request) or "anon"
     ask_id = (body.ask_id or "").strip()
     if ask_id:
         from ..core.master import feed_answer
         # 铁律（2026-08-16）：回答路由不静默吞异常，暴露 ask_id 链路问题
-        if feed_answer(device_id, ask_id, msg):
+        if feed_answer(email, ask_id, msg):
             return {"status": "ok", "reply": "", "task": None, "answered": True}
     if not msg:
         return {"status": "ok", "reply": "", "task": None}
-    user_id = getattr(request.state, "user_id", "") or device_id
+    user_id = getattr(request.state, "user_id", "") or email
     conv_id = (body.session_id or "").strip() or "default"
-    out = master.submit(device_id, message=msg, user_id=user_id, conversation_id=conv_id)
+    out = master.submit(email, message=msg, user_id=user_id, conversation_id=conv_id)
     return {"status": "ok", "task": out.get("task")}
 
 
@@ -366,7 +366,7 @@ async def update_me(request: Request, body: MeUpdate):
 # ═══════════════════ WebSocket 执行通道 ═══════════════════
 
 @router.websocket("/api/v1/ws")
-async def websocket_endpoint(websocket: WebSocket, session_id: str | None = None, device_id: str | None = None):
+async def websocket_endpoint(websocket: WebSocket, session_id: str | None = None, email: str | None = None):
     from ..channel.ws import handle_websocket
 
     manager = get_manager()
@@ -374,7 +374,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str | None = None
         session = manager.get(session_id)
         if session:
             session.websocket = websocket
-    await handle_websocket(websocket, session_id, device_id)
+    await handle_websocket(websocket, session_id, email)
 
 
 # ═══════════════════ Skill 消费 API（搜索 / 直调）═══════════════════
@@ -394,7 +394,7 @@ def _skill_intent(pid: str, owner_id: str = "") -> str:
 class SkillRunRequest(BaseModel):
     method: str
     params: dict = {}
-    device_id: str = ""   # 必传；空则 registry 直接报错（禁云端直发）
+    email: str = ""   # 必传；空则 registry 直接报错（禁云端直发）
     owner_id: str = ""    # 人签名；缺省时仅当 skill id 全局唯一才可跑
 
 
@@ -447,22 +447,22 @@ async def api_run_skill(skill_id: str, body: SkillRunRequest):
     """直接消费 skill。owner_id 建议必传（各人签名）。"""
     return await _skill_registry.run(
         skill_id, body.method, body.params or {},
-        device_id=body.device_id, owner_id=body.owner_id or "",
+        email=body.email, owner_id=body.owner_id or "",
     )
 
 
 @router.post("/api/v1/dev/browser")
 async def dev_browser(body: dict):
     """调试：向手机内置浏览器下发指令并拿结果（read_frames/click/slider/navigate…）。
-    POST /api/v1/dev/browser {device_id, cmd, params}。"""
-    device_id = str(body.get("device_id", ""))
+    POST /api/v1/dev/browser {email, cmd, params}。"""
+    email = str(body.get("email", ""))
     cmd = str(body.get("cmd", ""))
     params = body.get("params") or {}
-    if not device_id or not cmd:
-        return {"ok": False, "error": "need device_id+cmd"}
+    if not email or not cmd:
+        return {"ok": False, "error": "need email+cmd"}
     try:
         from ..channel.bridge import bridge
-        res = await bridge.send_cmd(device_id, cmd, params)
+        res = await bridge.send_cmd(email, cmd, params)
         return {"ok": True, "res": res}
     except Exception as e:
         return {"ok": False, "error": str(e)}

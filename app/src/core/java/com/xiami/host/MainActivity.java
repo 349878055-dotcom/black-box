@@ -125,6 +125,7 @@ public class MainActivity extends Activity {
             WebView.setWebContentsDebuggingEnabled(true);
         }
         WebView w = new WebView(this);
+        w.setOverScrollMode(WebView.OVER_SCROLL_NEVER);
         WebSettings s = w.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
@@ -239,6 +240,7 @@ public class MainActivity extends Activity {
 
     private WebView makeBrowserWeb() {
         WebView w = new WebView(this);
+        w.setOverScrollMode(WebView.OVER_SCROLL_NEVER);
         w.setFocusable(true);
         w.setFocusableInTouchMode(true);
         w.setOnTouchListener((v, ev) -> {

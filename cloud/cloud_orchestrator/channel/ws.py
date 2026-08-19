@@ -2,7 +2,7 @@
 SessionExecutor — WebSocket 执行通道（统一主脑后简化版）。
 
 职责（v2 平台化 / Device-as-Proxy）：
-  - WS 连接建立 → 按 device_id 注册到 DeviceBridge
+  - WS 连接建立 → 按 email 注册到 DeviceBridge
   - MasterAgent 经 bridge 与客户端交互：ask_user 推送问题 + 等用户输入；
     浏览器指令仅剩登录用：navigate 打开登录页 / clear_cookies / export_cookies /
     export_token / check_ready（真人登录人工配合；主代理不驱动其他浏览器遥控；
@@ -27,10 +27,10 @@ logger = logging.getLogger(__name__)
 class SessionExecutor:
     """WS 执行通道 — 每个 WebSocket 连接对应一个 executor"""
 
-    def __init__(self, session: Session, device_id: str | None = None):
+    def __init__(self, session: Session, email: str | None = None):
         self.session = session
         self.ws = session.websocket
-        self.device_id = device_id or None
+        self.email = email or None
         self._running = True
         # 等待客户端返回结果的 Future（指令回执）
         self._pending_result: asyncio.Future | None = None
@@ -58,12 +58,12 @@ class SessionExecutor:
 
         if msg_type == "session_ready":
             # 注册设备执行通道（供 MasterAgent 经 DeviceBridge 驱动本客户端）
-            device_id = data.get("device_id") or self.device_id
-            if device_id:
+            email = data.get("email") or self.email
+            if email:
                 from .bridge import bridge
 
-                self.device_id = device_id
-                bridge.register(device_id, self._send_and_wait,
+                self.email = email
+                bridge.register(email, self._send_and_wait,
                                 self.send_skill_request, self.send_push)
 
         elif msg_type == "result":
@@ -76,10 +76,10 @@ class SessionExecutor:
             # 铁律（2026-08-16）：回答只走 feed_answer，不保留兜底旧逻辑——
             # 兜底会掩盖 ask_id 回答路由的问题。匹配失败/无等待 → 明确记录。
             from ..core.master import feed_answer
-            if not feed_answer(self.device_id or "", ask_id, value):
+            if not feed_answer(self.email or "", ask_id, value):
                 logger.warning("[executor] user_input 无匹配的等待任务（可能无 ask 或 ask_id 过期）"
                                " device=%s ask_id=%s value=%s",
-                               self.device_id, ask_id, str(value)[:40])
+                               self.email, ask_id, str(value)[:40])
 
         elif msg_type == "user_action":
             self.session.context["last_user_action"] = data
@@ -106,7 +106,7 @@ class SessionExecutor:
                 logger.warning("[executor] skill_result 无匹配 req_id=%s", req_id)
 
         elif msg_type == "ping":
-            logger.debug("[executor] ping from device=%s", self.device_id)
+            logger.debug("[executor] ping from device=%s", self.email)
             await self._send({"cmd": "pong", "params": {}})
 
         else:
@@ -195,11 +195,11 @@ class SessionExecutor:
     def _cleanup(self):
         """清理资源：注销设备通道、销毁会话"""
         self._running = False
-        if self.device_id:
+        if self.email:
             try:
                 from .bridge import bridge
 
-                bridge.unregister(self.device_id)
+                bridge.unregister(self.email)
             except Exception:
                 pass
         if self._pending_result and not self._pending_result.done():
@@ -217,11 +217,11 @@ class SessionExecutor:
 async def handle_websocket(
     websocket: WebSocket,
     session_id: str | None = None,
-    device_id: str | None = None,
+    email: str | None = None,
 ):
     """
     WebSocket 入口 — 接受连接并启动执行通道
-    device_id 可经 URL 查询参数传入（设备标识，供 MasterAgent 驱动）
+    email 可经 URL 查询参数传入（设备标识，供 MasterAgent 驱动）
     """
     await websocket.accept()
 
@@ -233,5 +233,5 @@ async def handle_websocket(
     else:
         session.websocket = websocket
 
-    executor = SessionExecutor(session, device_id=device_id)
+    executor = SessionExecutor(session, email=email)
     await executor.start()

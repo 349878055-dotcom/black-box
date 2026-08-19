@@ -1,7 +1,7 @@
 """
 对话信息流落盘 — 手机/电脑背后完整链路，出问题可全面检查。
 
-写入: cloud_orchestrator/data/flows/<device_id>.jsonl  （每行一条事件）
+写入: cloud_orchestrator/data/flows/<email>.jsonl  （每行一条事件）
 以及: cloud_orchestrator/data/flows/_all.jsonl         （全局最近事件）
 """
 from __future__ import annotations
@@ -38,18 +38,18 @@ def _clip(val: Any, limit: int = 4000) -> Any:
     return val
 
 
-def log_flow(device_id: str, kind: str, **payload: Any) -> None:
+def log_flow(email: str, kind: str, **payload: Any) -> None:
     """追加一条信息流事件。"""
     entry = {
         "ts": _ts(),
-        "device_id": device_id or "unknown",
+        "email": email or "unknown",
         "kind": kind,
         **{k: _clip(v) for k, v in payload.items()},
     }
     line = json.dumps(entry, ensure_ascii=False) + "\n"
     with _lock:
         try:
-            with (FLOWS_DIR / f"{device_id or 'unknown'}.jsonl").open("a", encoding="utf-8") as f:
+            with (FLOWS_DIR / f"{email or 'unknown'}.jsonl").open("a", encoding="utf-8") as f:
                 f.write(line)
             all_path = FLOWS_DIR / "_all.jsonl"
             with all_path.open("a", encoding="utf-8") as f:
@@ -61,9 +61,9 @@ def log_flow(device_id: str, kind: str, **payload: Any) -> None:
             pass
 
 
-def read_flow(device_id: str | None = None, limit: int = 200) -> list[dict]:
-    """读最近 limit 条；device_id 为空则读全局。"""
-    path = FLOWS_DIR / (f"{device_id}.jsonl" if device_id else "_all.jsonl")
+def read_flow(email: str | None = None, limit: int = 200) -> list[dict]:
+    """读最近 limit 条；email 为空则读全局。"""
+    path = FLOWS_DIR / (f"{email}.jsonl" if email else "_all.jsonl")
     if not path.exists():
         return []
     try:

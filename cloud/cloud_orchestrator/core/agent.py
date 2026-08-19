@@ -87,11 +87,11 @@ class Agent:
     """业务运行时：人设闸门 + 工具实现；调度由 LangGraph 完成。"""
 
     def __init__(self, ask_user_fn: Callable[[str], Awaitable[str]] | None = None,
-                 device_id: str = "",
+                 email: str = "",
                  steps_fn: dict | None = None,
                  form_fn: dict | None = None) -> None:
         self.ask_user_fn = ask_user_fn
-        self.device_id = device_id or ""
+        self.email = email or ""
         # 执行进度锚点（update_todo_list 轻量版）：{get: ()->list, set: (steps)->None}
         self.steps_fn = steps_fn or {}
         # 契约 form 字段表：{get: ()->dict, set: (forms)->bool}；无回调则用内存
@@ -297,7 +297,7 @@ class Agent:
                 # 自动触发登录：方法需要登录且未登录 → 云端通用登录器登录后自动重试（最多 2 次）
                 for attempt in range(2):
                     result = await adapters.run(skill, method, params,
-                                                device_id=self.device_id,
+                                                email=self.email,
                                                 owner_id=self.person_id)
                     if isinstance(result, dict) and result.get("need_login"):
                         logger.info("检测到 %s 需要登录（第 %d 次）", skill, attempt + 1)
@@ -430,7 +430,7 @@ class Agent:
                 logger.warning("skill %s 未声明 login 配置，无法自动登录", skill)
                 return False
             return await run_login(
-                skill, login_cfg, self.device_id, self._ask, phone,
+                skill, login_cfg, self.email, self._ask, phone,
                 owner_id=self.person_id,
             )
         except Exception as e:
@@ -757,7 +757,7 @@ class Agent:
             try:
                 src_params = await self._fill_requires(skill, from_m, src_params)
                 src = await adapters.run(skill, from_m, src_params,
-                                         device_id=self.device_id,
+                                         email=self.email,
                                          owner_id=self.person_id)
             except Exception as e:
                 logger.warning("form auto 调 %s.%s 失败: %s", skill, from_m, e)
@@ -856,12 +856,12 @@ class Agent:
             kind = ("pay_url" if val.startswith("http://") or val.startswith("https://")
                     else "scheme")
 
-        if kind == "pay_url" and self.device_id:
+        if kind == "pay_url" and self.email:
             # 支付不进内置浏览器遥控：用系统浏览器打开（App 内零收款，第 5 条）
             # 同时交付：直接弹出 + 结果里保留链接文本，AI 可展示给客户（未弹出也能复制/稍后点）
             try:
                 from ..channel.bridge import bridge
-                await bridge.send_cmd(self.device_id, "open_external", {"url": val})
+                await bridge.send_cmd(self.email, "open_external", {"url": val})
                 result = dict(result)
                 result["pay_url"] = val
                 result["note"] = f"已为您打开支付页面：{val}（若未弹出，可复制此链接稍后支付）"
@@ -882,11 +882,11 @@ class Agent:
             if fb_url:
                 note += f"（未拉起可复制备用链接：{fb_url}）"
             result["note"] = note
-            if self.device_id:
+            if self.email:
                 try:
                     from ..channel.bridge import bridge
                     open_url = fb_url if fb_url.startswith("http") else val
-                    await bridge.send_cmd(self.device_id, "open_external", {"url": open_url})
+                    await bridge.send_cmd(self.email, "open_external", {"url": open_url})
                 except Exception as e:
                     logger.warning("推送 scheme/备用链接失败: %s", e)
         return result
@@ -946,7 +946,7 @@ class Agent:
                 if cache_key not in _cache:
                     _cache[cache_key] = await adapters.run(
                         skill, from_m, src_params,
-                        device_id=self.device_id,
+                        email=self.email,
                         owner_id=self.person_id)
                 src = _cache[cache_key]
                 if not (isinstance(src, dict) and src.get("ok")):

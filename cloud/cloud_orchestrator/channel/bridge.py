@@ -1,5 +1,5 @@
 """
-DeviceBridge — 按 device_id 路由「执行通道」。
+DeviceBridge — 按 email 路由「执行通道」。
 
 云端 MasterAgent 要与某台设备的客户端交互时（ask_user 推送问题 / 等用户输入 /
 浏览器人工配合：登录/验证码），通过 bridge 找到该设备当前活跃的 WS 执行器
@@ -10,7 +10,7 @@ Device-as-Proxy（第 1 条）：bridge 同时承载「skill 执行通道」—�
 云端不再直发平台请求。
 
 每台设备的 WS 连接建立后注册：
-  register(device_id, send_cmd, send_skill_request, send_push)
+  register(email, send_cmd, send_skill_request, send_push)
 断线后 unregister。
 （ask_user 交互统一走 master._answer_waiter + feed_answer，不占 bridge 的 wait_user_input 槽）
 
@@ -34,33 +34,33 @@ class DeviceBridge:
         self._devices: dict[str, dict[str, Any]] = {}
         self._lock = asyncio.Lock()
 
-    def register(self, device_id: str, send_cmd: SendCmd,
+    def register(self, email: str, send_cmd: SendCmd,
                  send_skill_request: SendSkillRequest | None = None,
                  send_push: SendPush | None = None) -> None:
         """设备执行通道上线（WS 连接成功时）。"""
-        if not device_id:
+        if not email:
             return
-        self._devices[device_id] = {
+        self._devices[email] = {
             "send_cmd": send_cmd,
             "send_skill_request": send_skill_request,
             "send_push": send_push,
         }
-        logger.info("[bridge] 设备执行通道上线 device=%s 在线=%d", device_id, len(self._devices))
+        logger.info("[bridge] 设备执行通道上线 device=%s 在线=%d", email, len(self._devices))
 
-    def unregister(self, device_id: str) -> None:
-        if device_id in self._devices:
-            del self._devices[device_id]
-            logger.info("[bridge] 设备执行通道下线 device=%s 在线=%d", device_id, len(self._devices))
+    def unregister(self, email: str) -> None:
+        if email in self._devices:
+            del self._devices[email]
+            logger.info("[bridge] 设备执行通道下线 device=%s 在线=%d", email, len(self._devices))
 
-    def has(self, device_id: str) -> bool:
-        return device_id in self._devices
+    def has(self, email: str) -> bool:
+        return email in self._devices
 
     def online_devices(self) -> list[str]:
         return list(self._devices.keys())
 
-    async def send_push(self, device_id: str, cmd: str, params: dict | None = None) -> None:
+    async def send_push(self, email: str, cmd: str, params: dict | None = None) -> None:
         """向设备推送一条指令（只发不等回执），用于 task_update 等实时通知，不阻塞。"""
-        entry = self._devices.get(device_id)
+        entry = self._devices.get(email)
         if not entry:
             return
         fn = entry.get("send_push")
@@ -69,38 +69,38 @@ class DeviceBridge:
         try:
             await fn(cmd, params or {})
         except Exception as e:
-            logger.warning("[bridge] send_push 失败 device=%s cmd=%s: %s", device_id, cmd, e)
+            logger.warning("[bridge] send_push 失败 device=%s cmd=%s: %s", email, cmd, e)
 
-    async def send_cmd(self, device_id: str, cmd: str, params: dict | None = None) -> dict:
+    async def send_cmd(self, email: str, cmd: str, params: dict | None = None) -> dict:
         """向指定设备发指令并等 result。设备未在线 → 返回错误。"""
-        entry = self._devices.get(device_id)
+        entry = self._devices.get(email)
         if not entry:
-            return {"error": f"设备 {device_id} 执行通道未在线（请确认客户端已连接）"}
+            return {"error": f"设备 {email} 执行通道未在线（请确认客户端已连接）"}
         try:
             res = await entry["send_cmd"](cmd, params or {})
             return res if isinstance(res, dict) else {}
         except Exception as e:
-            logger.warning("[bridge] send_cmd 失败 device=%s cmd=%s: %s", device_id, cmd, e)
+            logger.warning("[bridge] send_cmd 失败 device=%s cmd=%s: %s", email, cmd, e)
             return {"error": str(e)}
 
-    async def send_skill_request(self, device_id: str, payload: dict) -> dict:
+    async def send_skill_request(self, email: str, payload: dict) -> dict:
         """向设备下发 skill_request 请求蓝图，等手机回 skill_result（第 1 条）。
 
         设备未在线 / 客户端未实现 skill 通道 → 返回 ok=False 的明确错误。
         """
-        entry = self._devices.get(device_id)
+        entry = self._devices.get(email)
         if not entry:
             return {"ok": False,
-                    "error": f"设备 {device_id} 执行通道未在线（请确认客户端已连接）"}
+                    "error": f"设备 {email} 执行通道未在线（请确认客户端已连接）"}
         fn = entry.get("send_skill_request")
         if not fn:
             return {"ok": False,
-                    "error": f"设备 {device_id} 客户端未实现 skill 执行通道（请升级 App）"}
+                    "error": f"设备 {email} 客户端未实现 skill 执行通道（请升级 App）"}
         try:
             res = await fn(payload or {})
             return res if isinstance(res, dict) else {}
         except Exception as e:
-            logger.warning("[bridge] send_skill_request 失败 device=%s: %s", device_id, e)
+            logger.warning("[bridge] send_skill_request 失败 device=%s: %s", email, e)
             return {"ok": False, "error": str(e)}
 
 

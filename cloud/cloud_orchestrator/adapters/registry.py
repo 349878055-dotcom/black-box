@@ -145,11 +145,11 @@ def is_ai_visible(info: dict | None) -> bool:
     return True
 
 
-def _make_executor(device_id: str):
+def _make_executor(email: str):
     """构造手机执行通道：async (blueprint) -> skill_result dict。"""
     async def executor(blueprint: dict) -> dict:
         from ..channel.bridge import bridge
-        return await bridge.send_skill_request(device_id, blueprint or {})
+        return await bridge.send_skill_request(email, blueprint or {})
     return executor
 
 
@@ -221,7 +221,7 @@ def get_contract(skill_id: str, owner_id: str = "") -> dict | None:
 
 
 async def run(skill: str, method: str, params: dict | None = None,
-              device_id: str = "", owner_id: str = "") -> dict:
+              email: str = "", owner_id: str = "") -> dict:
     """skill_run：按人签名查找 → 手机直连平台 → 回传解析。
 
     transport 只认 phone_only：无手机通道直接报错，绝不云端直发。
@@ -237,15 +237,15 @@ async def run(skill: str, method: str, params: dict | None = None,
     if transport != "phone_only":
         return {"ok": False, "skill": skill, "method": method,
                 "error": f"才艺 {skill} 的 transport={transport} 已废弃，只允许 phone_only（云端不直连平台）"}
-    if not device_id:
+    if not email:
         return {"ok": False, "skill": skill, "method": method,
-                "error": "未指定手机（device_id 为空），已停止执行避免云端直发"}
+                "error": "未指定手机（email 为空），已停止执行避免云端直发"}
     try:
         from ..channel.bridge import bridge
         online = bridge.online_devices()
-        if not bridge.has(device_id):
+        if not bridge.has(email):
             logger.warning("[registry] 手机离线拦截 skill=%s method=%s device=%s 在线=%s",
-                           skill, method, device_id, online)
+                           skill, method, email, online)
             return {"ok": False,
                     "error": "手机未在线（请打开 App 保持在线），已停止执行避免云端直发",
                     "skill": skill, "method": method}
@@ -254,9 +254,9 @@ async def run(skill: str, method: str, params: dict | None = None,
         return {"ok": False, "skill": skill, "method": method,
                 "error": f"手机通道检查失败：{e}"}
     logger.info("[registry] run sig=%s method=%s device=%s",
-                skill_sig(cfg.get("owner_id", ""), skill), method, device_id)
+                skill_sig(cfg.get("owner_id", ""), skill), method, email)
     try:
-        inst = _get_instance(cfg, _make_executor(device_id))
+        inst = _get_instance(cfg, _make_executor(email))
         if inst is None:
             return {"ok": False, "error": f"才艺 {skill} 适配器加载失败"}
         fn = getattr(inst, method)

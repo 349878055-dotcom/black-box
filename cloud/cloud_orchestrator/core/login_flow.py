@@ -26,7 +26,7 @@ MAX_CAPTCHA_TRIES = 3
 LOGIN_TOTAL_TIMEOUT = 900
 
 
-async def run_login(skill: str, login_cfg: dict, device_id: str,
+async def run_login(skill: str, login_cfg: dict, email: str,
                     ask, phone: str = "", owner_id: str = "") -> bool:
     """按 skill 声明的 login 配置执行登录。ask = async (question, image=None) -> str。
 
@@ -38,11 +38,11 @@ async def run_login(skill: str, login_cfg: dict, device_id: str,
     try:
         if method == "sms_verify":
             return await asyncio.wait_for(
-                _sms_verify(skill, cfg, device_id, ask, phone, owner_id=owner_id),
+                _sms_verify(skill, cfg, email, ask, phone, owner_id=owner_id),
                 timeout=LOGIN_TOTAL_TIMEOUT)
         if method == "browser":
             return await asyncio.wait_for(
-                _browser(skill, cfg, device_id, ask),
+                _browser(skill, cfg, email, ask),
                 timeout=LOGIN_TOTAL_TIMEOUT)
     except asyncio.TimeoutError:
         logger.warning("登录流程总超时 skill=%s method=%s（>%ss）",
@@ -87,7 +87,7 @@ def _is_refresh_captcha(text: str) -> bool:
     return len(t) <= 16 and any(x in t for x in ("看不清", "换一张", "换张图"))
 
 
-async def _sms_verify(skill: str, cfg: dict, device_id: str, ask, phone: str = "",
+async def _sms_verify(skill: str, cfg: dict, email: str, ask, phone: str = "",
                       owner_id: str = "") -> bool:
     """短信验证码登录：手机号 → 图形码(图) → 短信码 → login，全程走手机通道。"""
     from ..adapters.registry import run as skill_run
@@ -114,7 +114,7 @@ async def _sms_verify(skill: str, cfg: dict, device_id: str, ask, phone: str = "
         for attempt in range(1, MAX_CAPTCHA_TRIES + 1):
             cap_params = {k: _fill(str(v), vars_map)
                           for k, v in (cap_step.get("params") or {}).items()}
-            cap = await skill_run(skill, cap_step["method"], cap_params, device_id,
+            cap = await skill_run(skill, cap_step["method"], cap_params, email,
                                   owner_id=owner_id)
             cap_data = cap.get("data") or {}
             if not cap.get("ok") or not cap_data.get("ok"):
@@ -138,7 +138,7 @@ async def _sms_verify(skill: str, cfg: dict, device_id: str, ask, phone: str = "
             v2["captcha_code"] = gcode
             sms_params = {k: _fill(str(v), v2)
                           for k, v in (sms_step.get("params") or {}).items()}
-            sms = await skill_run(skill, sms_step["method"], sms_params, device_id,
+            sms = await skill_run(skill, sms_step["method"], sms_params, email,
                                   owner_id=owner_id)
             sms_data = sms.get("data") or {}
             if sms.get("ok") and sms_data.get("ok"):
@@ -160,7 +160,7 @@ async def _sms_verify(skill: str, cfg: dict, device_id: str, ask, phone: str = "
         v2 = dict(vars_map)
         v2["captcha_code"] = gcode
         sms_params = {k: _fill(str(v), v2) for k, v in (sms_step.get("params") or {}).items()}
-        sms = await skill_run(skill, sms_step["method"], sms_params, device_id,
+        sms = await skill_run(skill, sms_step["method"], sms_params, email,
                               owner_id=owner_id)
         sms_data = sms.get("data") or {}
         if not sms.get("ok") or not sms_data.get("ok"):
@@ -178,7 +178,7 @@ async def _sms_verify(skill: str, cfg: dict, device_id: str, ask, phone: str = "
         v3 = dict(vars_map)
         v3["sms_code"] = code
         login_params = {k: _fill(str(v), v3) for k, v in (login_step.get("params") or {}).items()}
-        login = await skill_run(skill, login_step["method"], login_params, device_id,
+        login = await skill_run(skill, login_step["method"], login_params, email,
                                 owner_id=owner_id)
         login_data = login.get("data") or {}
         if not login.get("ok") or not login_data.get("ok"):
@@ -190,7 +190,7 @@ async def _sms_verify(skill: str, cfg: dict, device_id: str, ask, phone: str = "
     return True
 
 
-async def _browser(skill: str, cfg: dict, device_id: str, ask) -> bool:
+async def _browser(skill: str, cfg: dict, email: str, ask) -> bool:
     """内置浏览器真人登录：可选清 cookie / 预检 → navigate → 真人操作 → 导出登录态。"""
     from ..channel.bridge import bridge
     interact = cfg.get("interact") or {}
@@ -199,35 +199,35 @@ async def _browser(skill: str, cfg: dict, device_id: str, ask) -> bool:
     domain = (export.get("domain") or url or "").strip()
 
     # 可选：先清残留 cookie（防登录页重定向回首页）
-    if device_id and cfg.get("clear_cookies"):
+    if email and cfg.get("clear_cookies"):
         try:
-            await bridge.send_cmd(device_id, "clear_cookies", {"domain": domain})
+            await bridge.send_cmd(email, "clear_cookies", {"domain": domain})
         except Exception as e:
             logger.warning("%s clear_cookies 失败: %s", skill, e)
 
     # 可选：预检是否已登录（如 export_cookies）
     precheck = cfg.get("precheck") or ""
-    if device_id and precheck:
+    if email and precheck:
         try:
-            pre = await bridge.send_cmd(device_id, precheck, {"domain": domain})
+            pre = await bridge.send_cmd(email, precheck, {"domain": domain})
             logger.info("%s precheck %s: %s", skill, precheck, str(pre)[:200])
         except Exception as e:
             logger.warning("%s precheck 失败: %s", skill, e)
 
-    if device_id and url:
+    if email and url:
         try:
-            await bridge.send_cmd(device_id, "navigate", {"url": url})
+            await bridge.send_cmd(email, "navigate", {"url": url})
         except Exception as e:
             logger.warning("%s navigate 打开登录页失败: %s", skill, e)
     await ask(interact.get("guide",
               "已在内置浏览器打开登录页，请完成登录后回复「已登录」。"))
-    if device_id and export.get("cmd"):
+    if email and export.get("cmd"):
         try:
             # 透传 export 配置（domain/skill 等），缺 skill 时用当前平台 id，保证凭据写入正确卡片
             exp_params = {k: v for k, v in export.items() if k != "cmd"}
             if not exp_params.get("skill"):
                 exp_params["skill"] = skill
-            res = await bridge.send_cmd(device_id, export["cmd"], exp_params)
+            res = await bridge.send_cmd(email, export["cmd"], exp_params)
             logger.info("%s export: %s", skill, str(res)[:200])
             # 校验导出是否成功：手机端返回 {ok:true,...} 才视为登录态已保存；
             # 导出失败不能假装登录成功（否则 agent 重试业务仍未登录，用户只看到「需要登录」却不知导出失败）

@@ -54,7 +54,7 @@ def _brief(r) -> str:
 
 
 def hired_agent() -> Agent:
-    a = Agent(device_id="verify-search")
+    a = Agent(email="verify-search")
     a.hired = True
     a.person_id = OWNER
     a.allowed_skills = skills_for_owner(OWNER)
@@ -86,7 +86,7 @@ async def main() -> int:
         single = all_skills[0]
         from cloud_orchestrator.adapters.registry import get_adapter  # noqa: E402
         name_q = str((get_adapter(single, OWNER) or {}).get("name") or single)
-        sa = Agent(device_id="verify-single")
+        sa = Agent(email="verify-single")
         sa.hired = True
         sa.person_id = OWNER
         sa.allowed_skills = [single]
@@ -134,7 +134,7 @@ async def main() -> int:
     record("空 query（web）拦截", ok, _brief(r))
 
     # ── 6. 闲聊模式 skill：闸门拦截 ──
-    chat = Agent(device_id="verify-chat")
+    chat = Agent(email="verify-chat")
     chat.hired = False
     r = await chat._run_tool("search", {"query": "挂号", "scope": "skill", "method": "vector"})
     ok = isinstance(r, dict) and not r.get("ok") and "闲聊" in str(r.get("error", ""))

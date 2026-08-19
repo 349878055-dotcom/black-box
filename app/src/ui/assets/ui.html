@@ -28,7 +28,7 @@
 
 
 
-const S = { base:'', token:'', userId:'', deviceId:'', curSkill:null, timer:null, ws:null, lastReply:'', askGate:null, view:'chat', waitingAsk:false, askId:'', skillCatalog:{} };
+const S = { base:'', token:'', userId:'', email:'', curSkill:null, timer:null, ws:null, lastReply:'', askGate:null, view:'chat', waitingAsk:false, askId:'', skillCatalog:{} };
 const $ = id => document.getElementById(id);
 
 // ═══ 侧栏已废弃（改为全屏「对话列表」页）；closeSidebar 保留为空操作兼容原生调用 ═══
@@ -1202,7 +1202,7 @@ async function doLogin(isRegister) {
     switchLocalAccount(neu, prevEmail);
     S.token = r.access_token;
     S.userId = r.user_id || email;      // 新主键 user_id（UUID）
-    S.deviceId = email;                  // 设备通道/业务隔离键保持 email（云端 master/bridge 按 email 路由）
+    S.email = email;                  // 设备通道/业务隔离键保持 email（云端 master/bridge 按 email 路由）
     localStorage.setItem('xiami_base', base);
     localStorage.setItem('xiami_token', S.token);
     localStorage.setItem('xiami_refresh', r.refresh_token || '');
@@ -1240,7 +1240,7 @@ function doLogout() {
   const prev = currentEmail();
   if (S._sessLoaded && prev) { try { saveSessionsTo(prev); } catch (e) {} }
   switchLocalAccount('', prev); // 原生 active 置空，内存会话清空（不串到下一账号）
-  S.token=''; S.userId=''; S.deviceId=''; S.curSkill=null;
+  S.token=''; S.userId=''; S.email=''; S.curSkill=null;
   if (S.ws) { try { S.ws.close(); } catch(e){} S.ws = null; }
   if (S.timer) clearInterval(S.timer); S.timer=null;
   localStorage.removeItem('xiami_token');
@@ -1390,7 +1390,7 @@ function stopTaskPoll() { if (S.timer) { clearInterval(S.timer); S.timer = null;
 function startTaskPoll() { if (!S.timer) S.timer = setInterval(refreshTask, 1500); }
 
 // ═══ 设备执行通道（WS + AndroidBridge）═══
-function wsUrl() { return S.base.replace(/^http/, 'ws') + '/api/v1/ws?device_id=' + encodeURIComponent(S.deviceId) + '&token=' + encodeURIComponent(S.token); }
+function wsUrl() { return S.base.replace(/^http/, 'ws') + '/api/v1/ws?email=' + encodeURIComponent(S.email) + '&token=' + encodeURIComponent(S.token); }
 let _wsHb = null, _wsRetry = 0;
 function stopWsHeartbeat() { if (_wsHb) { clearInterval(_wsHb); _wsHb = null; } }
 function startWsHeartbeat(ws) {
@@ -1400,13 +1400,13 @@ function startWsHeartbeat(ws) {
   }, 25000);
 }
 function connectWS() {
-  if (!S.token || !S.deviceId) return;
+  if (!S.token || !S.email) return;
   if (S.ws && (S.ws.readyState === 0 || S.ws.readyState === 1)) return;
   try {
     const ws = new WebSocket(wsUrl());
     S.ws = ws;
     ws.onopen = () => {
-      ws.send(JSON.stringify({ type:'session_ready', data:{ device_id: S.deviceId } }));
+      ws.send(JSON.stringify({ type:'session_ready', data:{ email: S.email } }));
       startWsHeartbeat(ws);
       setConn('设备在线');
       _wsRetry = 0;
@@ -1843,7 +1843,7 @@ document.addEventListener('DOMContentLoaded', function init() {
       api('/api/v1/me').then(r => {
         const u = r.user || {};
         S.userId = u.user_id || u.email || '';   // 新主键 user_id（UUID）
-        S.deviceId = u.email || email;            // 设备通道键保持 email
+        S.email = u.email || email;            // 设备通道键保持 email
         const em2 = (u.email || email || '').trim().toLowerCase();
         if (em2) {
           if (currentEmail() !== em2) localStorage.setItem('xiami_email', u.email || email);
