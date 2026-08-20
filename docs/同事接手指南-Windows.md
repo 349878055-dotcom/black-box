@@ -16,7 +16,7 @@ git pull origin master
 pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt
 ```
 
-依赖里新增了 `langgraph-checkpoint-sqlite`，**必须再装一次 pip**，否则对话状态落盘会失败。
+> ⚠️ 标注：`requirements.txt` 已含 `langgraph-checkpoint-sqlite`（为落盘版预留）。**当前 checkpointer 用的是 `InMemorySaver`（内存版，重启丢对话状态）**，落盘版（AsyncSqliteSaver + aiosqlite）待接入——所以这条依赖**当前不是必须**，装上无妨，将来落盘会用。
 
 本地改过文件、`git pull` 冲突时，先把改动 stash 或提交，再 pull。不要用 `git reset --hard` 除非你确定可以丢掉本地修改。
 
@@ -31,9 +31,10 @@ pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt
 
 对话编排以当前代码为准：
 - 入口：cloud/cloud_orchestrator/core/graph_native.py（LangGraph StateGraph）
-- 用户回答：master.feed_answer → feed_graph_resume（必须对上 ask_id）→ interrupt resume
+- 用户回答：master.feed_answer → feed_graph_resume → interrupt resume
+  （⚠️ 当前按 email 单任务喂给 resume，未核对 ask_id；ask_id 精确路由列为待改进）
 - 答非所问 / 放弃 / 换事 / 整句填表：core/dialogue/ 纯函数，不要只改提示词
-- 办事字段权威在 LangGraph checkpoint（data/checkpoints.db），不是 conversations.json 的 forms/dialogue
+- 对话状态在 LangGraph checkpoint（⚠️ 当前 InMemorySaver 内存版，落盘版待接入 data/checkpoints.db）
 - 禁止再引入：_answer_waiter、DialogueOrchestrator、direct_ask 双通道、ask_user_fn、_asked_norm
 
 改对话行为先改 dialogue/ 和 graph_native；skill 契约仍看 plans/contract-v2-接口说明.md。
@@ -162,7 +163,8 @@ cd D:\projects\personal-assistant
 .venv\Scripts\activate
 $env:PYTHONPATH = "."
 python -m cloud.cloud_orchestrator.main
-# 首次启动会自动创建 cloud/cloud_orchestrator/data/checkpoints.db（对话状态落盘，SqliteSaver）
+# ⚠️ 标注：当前 checkpointer = InMemorySaver（内存版，重启丢对话状态）；
+#    落盘版（AsyncSqliteSaver → data/checkpoints.db，跨重启恢复）待接入。
 ```
 
 ### 验证
@@ -266,6 +268,7 @@ python --version
 # 4. Python 依赖
 python -c "import fastapi; import langchain_openai; import langgraph; import langgraph.checkpoint.sqlite; import sentence_transformers; print('ALL DEPS OK')"
 # 期望输出：ALL DEPS OK
+# ⚠️ langgraph.checkpoint.sqlite 当前未用到（InMemorySaver），为落盘版预留；导入失败可忽略这一项
 
 # 5. 配置文件
 python -c "import json; json.load(open('cloud/config.json','r',encoding='utf-8')); print('CONFIG OK')"
@@ -301,14 +304,14 @@ dir app\project\app\build\outputs\apk\debug\app-debug.apk
 ## 架构速览：对话编排（2026-08 已改 LangGraph 原生）
 
 - **一条主链**：`master.submit` → `Agent.handle` → `graph_native.run_agent_graph`（LangGraph：route → model → tools / force_ask → wait_ask）。
-- **用户回答不直接进 LLM**：`interrupt` 等人；回复经 `feed_answer`（核对 ask_id）→ `Command(resume)`，先过 `core/dialogue/resolve_reply`（零 LLM）：
+- **用户回答不直接进 LLM**：`interrupt` 等人；回复经 `feed_answer`（⚠️ 当前按 email 单任务喂 resume、未核对 ask_id）→ `Command(resume)`，先过 `core/dialogue/resolve_reply`（零 LLM）：
   - `ABANDON`（「算了不买了」）→ 收尾、不写表单；
   - `REASK`（答非所问）→ 原问题再问（attempt 上限 3）；
   - `SET_SLOT`（校验通过 / 整句拆槽 / 改成后天）→ 写入图状态 `forms`；
   - `OFF_TOPIC_CHAT`（「几点了」）→ 短答 + 继续原问；
   - `NEW_INTENT`（「帮我点外卖」）→ 停掉当前提问，用原话重新走 route。
 - **文字反问**：模型用纯文字问办事信息会被 correction / force_ask 改成真正的 `ask_user`，答案才能落盘。
-- **状态落盘**：SqliteSaver → `cloud/cloud_orchestrator/data/checkpoints.db`（thread_id = 会话 ID）。
+- **状态（checkpointer）**：⚠️ 当前 `InMemorySaver`（内存版，重启丢对话状态）。落盘版待接入：`AsyncSqliteSaver` + `aiosqlite` → `cloud/cloud_orchestrator/data/checkpoints.db`（thread_id = 会话 ID，跨重启恢复）。
 - **工具面按 phase 过滤**：`chat` 只有 search/done；`task` 才全量。
 - **改对话行为先看 `core/dialogue/`**，不要只改提示词。
 
@@ -324,13 +327,13 @@ personal-assistant/
 │   │   ├── config.py               # 读取 cloud/config.json
 │   │   ├── core/                   # Agent 引擎 + 对话编排（LangGraph 原生）
 │   │   │   ├── graph_state.py      # 图状态 schema（phase/forms/locked_skill/pending_ask）
-│   │   │   ├── graph_native.py     # StateGraph + interrupt/resume + checkpointer
+│   │   │   ├── graph_native.py     # StateGraph + interrupt/resume + checkpointer（InMemorySaver）
 │   │   │   ├── graph_tools.py      # 工具定义（按 phase 过滤工具面）
 │   │   │   ├── graph_engine.py     # 薄入口（run_agent_graph / feed_graph_resume）
 │   │   │   ├── dialogue/           # 对话护栏：resolve_reply / answer_check / route_entry / skill_lock / slots
 │   │   │   ├── agent.py            # 工具执行（skill_run / search / done / 登录）
 │   │   │   └── master.py           # 任务 + resume 唯一通道 + App 推送
-│   │   ├── data/                   # 运行时数据（checkpoints.db 等）
+│   │   ├── data/                   # 运行时数据（落盘版 checkpoints.db 将来放这）
 │   │   ├── channel/                # WebSocket 会话管理
 │   │   ├── store/archive_center/   # Skill 仓库（已接入的平台）
 │   │   ├── retrieval/              # 向量检索（BGE 模型）
@@ -345,7 +348,7 @@ personal-assistant/
 │   └── src/                        # 源码 + UI 资源
 │       ├── core/                   # Java 源码 + AndroidManifest.xml
 │       └── ui/                     # HTML/CSS/JS + drawable 资源
-├── tools/                          # 对话规则单测
+├── tools/                          # 对话规则单测（_test_dialogue.py 等）
 ├── plans/                          # 契约接口 + LangGraph 架构说明
 ├── docs/                           # 文档
 ├── requirements.txt                # 云端 Python 依赖
