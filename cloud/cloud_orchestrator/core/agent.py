@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Awaitable, Callable
 
 from ..adapters import registry as adapters
 
@@ -49,11 +48,18 @@ Step 2 分支：
 - 命中才艺 → 只选一个；【必须先 read_skill 读契约，加载契约后才能继续】；
   【严格按契约的方法自包含（requires 前置依赖 + customer_input）一步步走，不得超出、不得跳过】；
 - 没命中（咨询/闲聊）→ 正常回复，不读契约、不拉才艺。
+  尤其客户问「你能做哪些事 / 有哪些服务 / 介绍下你的才艺」等纯咨询 → 用纯文字直接介绍
+  名下才艺即可，绝对不要 ask_user 追问「您想办什么」、也不要 skill_run（G-03 回归）。
 约束：不许跳过本检查；只在选中才艺后才读契约；会话里已读过的契约不重复读。
 
 【★ 每轮必须调工具】：
 - 办理中每轮必须至少调用一个工具来推进，禁止用纯文字回复代替办理步骤；
 - 纯文字只允许用于：咨询/闲聊、或 done 收束前的阶段小结。
+
+【★ 收集信息必须用 ask_user，禁止文字反问】：
+- 需要客户提供任何信息（日期/城市/车次/席别/乘客姓名/身份证/手机号/科室/医院等）→ 必须调用 ask_user 工具，一次一个问题；
+- **绝对禁止**在 done 收束或普通回复里用文字反问客户（如「请问您要买什么票？」「请告诉我日期」）——文字反问客户无法把答案喂回流程，任务会卡死；
+- 若你试图用文字反问收束，系统会拒绝 done 并提示你改用 ask_user。
 
 【每轮决策】（先评估：我现在已有什么信息、还缺什么？再选工具；具体以契约为准）：
 1. 不知道用哪个才艺/方法 → 调 search 拿候选再挑；search 优先 scope=skill 搜名下才艺，只有名下确实没有、或要外部公开信息时才 scope=web；
@@ -77,7 +83,7 @@ Step 2 分支：
 - 每次调工具前先想：这一步该用哪个工具、参数齐不齐（参数不齐先 ask_user 补齐，别硬调）。"""
 
 
-MAX_STEPS = 14
+MAX_STEPS = 50
 
 # 向量检索相似度阈值：低于它视为"乱码/无关话"，不硬塞候选（待定 2 已落地）
 _MIN_VECTOR_SCORE = 0.5
@@ -86,18 +92,18 @@ _MIN_VECTOR_SCORE = 0.5
 class Agent:
     """业务运行时：人设闸门 + 工具实现；调度由 LangGraph 完成。"""
 
-    def __init__(self, ask_user_fn: Callable[[str], Awaitable[str]] | None = None,
-                 email: str = "",
-                 steps_fn: dict | None = None,
-                 form_fn: dict | None = None) -> None:
-        self.ask_user_fn = ask_user_fn
+    def __init__(self, email: str = "",
+                 conversation_id: str = "",
+                 graph_hooks: dict | None = None) -> None:
         self.email = email or ""
-        # 执行进度锚点（update_todo_list 轻量版）：{get: ()->list, set: (steps)->None}
-        self.steps_fn = steps_fn or {}
-        # 契约 form 字段表：{get: ()->dict, set: (forms)->bool}；无回调则用内存
-        self.form_fn = form_fn or {}
-        self._form_mem: dict = {}
+        self.conversation_id = conversation_id or ""
+        self.graph_hooks = graph_hooks or {}
+        self._graph_forms: dict = {}
+        self._graph_steps: list[dict] = []
+        self._graph_forms_dirty = False
+        self._graph_steps_dirty = False
         self.current_skill: str | None = None
+        self.dialogue_phase: str = "task"
         self._pending_image: str | None = None
         self.allowed_skills: list[str] = []
         self.person_id: str = ""
@@ -105,13 +111,16 @@ class Agent:
         self._done_reply: str | None = None
 
     async def handle(self, text: str, history: list[dict] | None = None,
-                     persona: dict | None = None) -> str:
-        """处理一条用户消息。persona 来自会话（手动找人）；history 为多轮文本。"""
+                     persona: dict | None = None,
+                     graph_hooks: dict | None = None) -> str:
+        """处理一条用户消息。"""
         persona = persona if isinstance(persona, dict) else {}
         self.person_id = str(persona.get("person_id") or "").strip()
         self.hired = bool(self.person_id)
         self.allowed_skills = self._resolve_allowed_skills(persona)
         self._done_reply = None
+        if graph_hooks:
+            self.graph_hooks = graph_hooks
 
         if self.hired:
             system = self._build_hired_system()
@@ -173,14 +182,17 @@ class Agent:
             except Exception as e:
                 logger.warning("登录直通异常: %s", e)
 
-        # 调度交给 LangGraph（业务仍在 _run_tool）
-        from .graph_engine import run_react
-        return await run_react(
+        from .graph_native import run_agent_graph
+        return await run_agent_graph(
             runtime=self,
             system=system,
             user_content=user_content,
             history=history,
             hired=self.hired,
+            conversation_id=self.conversation_id,
+            allowed_skills=self.allowed_skills,
+            person_id=self.person_id,
+            hooks=self.graph_hooks,
             max_steps=MAX_STEPS,
         )
 
@@ -275,7 +287,12 @@ class Agent:
                 if self.allowed_skills and skill not in self.allowed_skills:
                     return {"ok": False, "skill": skill, "method": method,
                             "error": f"当前帮手不会「{skill}」，名下才艺：{', '.join(self.allowed_skills)}"}
+                # SkillLock 闸门
+                lock_err = self._enforce_skill_lock(skill)
+                if lock_err:
+                    return {"ok": False, "skill": skill, "method": method, "error": lock_err}
                 self.current_skill = skill
+                self._maybe_lock_skill(skill, f"skill_run_{method}")
                 # 契约 form：已填值补进参数；auto 字段现调源头；写回会话状态
                 params = await self._apply_form(skill, params)
                 # 前置依赖自动补齐（原子化 + 前置依赖）：requires 参数缺失时，
@@ -322,16 +339,15 @@ class Agent:
             if name == "read_skill":
                 if not self.hired:
                     return {"ok": False, "error": "当前是闲聊对话，不能读取才艺；请去「✨ 才艺」找对应的人"}
-                return self._read_skill(str(args.get("skill", "")))
+                sid = str(args.get("skill", ""))
+                lock_err = self._enforce_skill_lock(sid)
+                if lock_err:
+                    return {"ok": False, "error": lock_err}
+                self.current_skill = sid
+                self._maybe_lock_skill(sid, "read_skill")
+                return self._read_skill(sid)
             if name == "ask_user":
-                image = self._pending_image
-                self._pending_image = None   # 用一次后清掉
-                opts = args.get("options") or []
-                opts = [str(x) for x in opts if str(x).strip()] if isinstance(opts, list) else []
-                question = str(args.get("question", ""))
-                ans = await self._ask(question, image, options=opts)
-                self._store_form_answer(question, ans)
-                return {"ok": True, "answer": ans}
+                return {"ok": False, "error": "ask_user 由 LangGraph interrupt 节点处理，不应直调 _run_tool"}
             if name == "search":
                 # 问题⑩（2026-08-16）：统一检索工具——AI 自己生成关键词 + 选 scope。
                 # scope=skill：搜名下才艺/方法（向量比意思 / 关键词找字，返回候选 top-3 完整信息）
@@ -339,44 +355,45 @@ class Agent:
                 # 检索结果只在 AI 调用后返回，不再每句话强制注入。
                 # scope 归一化：兼容大小写/首尾空格（WEB / web  /  web 一律按 web 处理）
                 scope = str(args.get("scope", "") or "skill").strip().lower()
-                if not self.hired and scope != "web":
+                # chat phase 允许 web 搜索（S4）；task phase hired 默认 skill
+                if self.dialogue_phase == "chat":
+                    if scope not in ("web", "skill"):
+                        scope = "web"
+                elif not self.hired and scope != "web":
                     return {"ok": False, "error": "当前是闲聊对话，不能检索名下才艺；请去「✨ 才艺」找人"}
                 query = str(args.get("query", "") or "").strip()
                 if not query:
                     return {"ok": False, "scope": scope,
                             "error": "缺少搜索关键词（query）"}
+                # search skill 结果若与 lock 冲突，后续 _search_skill 会过滤
                 method = str(args.get("method", "") or "vector")
                 if scope == "web":
                     return await self._web_search(query)
                 # scope=skill（默认）：向量或关键词检索名下才艺/方法
                 return await self._search_skill(query, method=method)
             if name == "done":
-                return {"ok": True, "done": True, "reply": args.get("reply", "")}
+                reply = str(args.get("reply", "") or "")
+                # 反问拦截（2026-08-19）：done 收束时若回复是向客户提问（含问号且非纯陈述），
+                # 拒绝收束，强制 LLM 改用 ask_user 工具——否则客户回答无法喂回流程，任务会卡住。
+                if self._needs_ask_user(reply):
+                    return {"ok": False, "done": False,
+                            "error": "收束回复里包含向客户提问的内容。需要客户提供信息时，"
+                                     "必须调用 ask_user 工具（一次一个问题），禁止用 done 的文字反问。"
+                                     "请改用 ask_user 提问，收集到信息后再继续或 done 收束。"}
+                return {"ok": True, "done": True, "reply": reply}
             if name == "update_step":
-                # 问题⑧-1（防御）：update_step 只在 hired（雇了才艺人）时可用。
-                # 不能只靠"工具只在 hired 才挂载"兜住，分支内也加一道防线。
                 if not self.hired:
                     return {"ok": False, "error": "当前是闲聊对话，不能维护执行进度；请去「✨ 才艺」找对应的人"}
-                # 执行进度锚点（update_todo_list 轻量版）：覆盖式写入当前任务步骤
                 raw = args.get("steps") or []
                 if not isinstance(raw, list):
                     return {"ok": False, "error": "steps 需为列表：[{step,title,status}]"}
-                setter = self.steps_fn.get("set") if isinstance(self.steps_fn, dict) else None
-                if not setter:
-                    # 问题③：进度根本没处可存（steps_fn 没传/任务卡片缺失）时，
-                    # 如实报错，不让虾米误以为写上了。
-                    return {"ok": False, "error": "进度存储不可用"}
-                saved = setter(raw)
-                if saved is False:
-                    # 问题③：落库失败（跨轮记忆会丢）也要如实告知，不假装成功。
-                    return {"ok": False, "error": "进度保存失败，请稍后重试"}
-                # 问题④：回读实际生效版（清洗后：截断/丢弃/序号重排/状态归一）再返回，
-                # 虾米拿到的永远是"真存下来的清单"，不和 App 端对不上。
-                getter = self.steps_fn.get("get") if isinstance(self.steps_fn, dict) else None
-                actual = getter() if getter else None
-                if not isinstance(actual, list):
-                    actual = raw
-                return {"ok": True, "steps": actual}
+                clean = self._clean_steps(raw, prev=self._graph_steps)
+                self._graph_steps = clean
+                self._graph_steps_dirty = True
+                on_steps = self.graph_hooks.get("on_steps")
+                if on_steps:
+                    await on_steps(clean)
+                return {"ok": True, "steps": clean}
             return {"ok": False, "error": f"未知工具：{name}"}
         except Exception as e:
             logger.warning("tool %s 异常: %s", name, e)
@@ -436,6 +453,68 @@ class Agent:
         except Exception as e:
             logger.warning("登录编排异常 skill=%s: %s", skill, e)
             return False
+
+    # ─────────── 反问/索取检测（收尾硬闸 + done 拦截，强制用 ask_user）───────────
+    _QUESTION_HINTS = (
+        "请问", "是否", "吗", "呢", "请告诉我", "请提供", "请确认", "请选择",
+        "需要您", "您是否", "要不要", "行不行", "可以吗", "好吗", "如何",
+        "哪个", "什么", "几号", "几点", "哪家", "哪趟", "哪班", "请回复",
+        "请回答", "麻烦您", "请补充", "请填写", "请选择", "请告知",
+    )
+    # 明确索取短语：无问号也算「在向客户要办事信息」
+    # （Bug 1 主句式「请把出发地、目的地、日期发我。」这种命令式索取句）
+    _SOLICIT_PHRASES = (
+        "请提供", "请告诉我", "请把", "请发", "请回复", "请填写", "请告知",
+        "需要您", "请选择", "请确认", "把您的", "报一下", "提供一下", "发一下",
+    )
+    # 办事信息名词：出现即大概率是「要客户给办事必需信息」
+    _INFO_NOUNS = (
+        "出发地", "目的地", "日期", "时间", "车次", "席别", "航班", "座位",
+        "姓名", "身份证", "手机号", "电话", "科室", "医院", "地址", "数量",
+        "账号", "验证码", "联系人", "收货地址",
+    )
+    # 办事意图词（零工具补丁用）：用户这句话是否明显像要办事
+    _TASK_VERBS = ("买", "订", "挂", "点", "办", "约", "购", "下单", "预约", "查")
+    _TASK_OBJS = ("票", "号", "餐", "外卖", "车票", "机票", "酒店", "订单", "菜")
+
+    def _needs_ask_user(self, text: str) -> bool:
+        """判断 bot 这段文字是否在向客户索取「办事必需信息」（文字反问）。
+
+        命中 → 收尾硬闸打回 / done 拒绝收束，强制改用 ask_user 工具——
+        因为文字反问的答案客户无法喂回流程（feed_answer 只认 ask_user 的等待项）。
+        保守策略：只认强索取信号，确认/客套问句（「还需要我做什么吗」）一律放行，
+        避免误伤正常收尾（用户铁令：不能把正常聊天/收尾也塞进 ask_user）。
+        """
+        t = str(text or "").strip()
+        if not t:
+            return False
+        has_q = ("？" in t) or ("?" in t)
+        # 客套/确认性收尾先排除（「还需要我…吗」「要我帮您…」不是索取办事信息）
+        if any(k in t for k in ("还需要我", "还需不需要", "要我帮您做什么",
+                                 "能帮您做什么", "还需要您", "如需帮助")):
+            return False
+        # ① 明确索取短语（有问号无问号都算）
+        for h in self._SOLICIT_PHRASES:
+            if h in t:
+                return True
+        # ② 有问号 + 信息询问词 或 办事信息名词 → 判索取
+        q_word_hit = any(w in t for w in ("哪个", "几号", "几点", "哪家", "哪趟",
+                                           "哪班", "多少", "哪里", "什么"))
+        info_hit = any(n in t for n in self._INFO_NOUNS)
+        if has_q and (q_word_hit or info_hit):
+            return True
+        # ③ 无问号但办事信息名词 + 索取动词 → 判索取（「您的出发地是？请发我」）
+        if info_hit and any(v in t for v in ("请", "告诉", "提供", "发", "报", "填")):
+            return True
+        return False
+
+    def _looks_like_task(self, text: str) -> bool:
+        """用户这句话是否明显像要办事（零工具补丁用）。
+        保守：办事动词 + 办事宾语 同时出现才算，避免「机票贵吗」这类误触发。"""
+        t = (str(text or "") or "").strip()
+        if not t:
+            return False
+        return any(v in t for v in self._TASK_VERBS) and any(o in t for o in self._TASK_OBJS)
 
     # ─────────── 小纸条机制 ───────────
     def _make_note(self, text: str) -> dict:
@@ -660,25 +739,32 @@ class Agent:
         except Exception:
             return []
 
+    @staticmethod
+    def _clean_steps(raw: list, prev: list | None = None) -> list[dict]:
+        """清洗执行进度，合并历史 done 项（LangGraph AgentState.steps 权威）。"""
+        _STATUS_ALLOW = {"pending", "doing", "done"}
+        clean: list[dict] = []
+        for s in (raw or []):
+            if not isinstance(s, dict):
+                continue
+            raw_status = str(s.get("status") or "pending").strip().lower()
+            status = raw_status if raw_status in _STATUS_ALLOW else "pending"
+            item = {"step": len(clean) + 1, "title": str(s.get("title") or "")[:80], "status": status}
+            if item["title"]:
+                clean.append(item)
+        prev_titles = {str(s.get("title") or "") for s in clean}
+        for s in (prev or []):
+            if s.get("status") == "done" and str(s.get("title") or "") not in prev_titles:
+                clean.append({"step": len(clean) + 1,
+                              "title": str(s.get("title") or "")[:80], "status": "done"})
+        return clean
+
     def _form_all(self) -> dict:
-        getter = self.form_fn.get("get") if isinstance(self.form_fn, dict) else None
-        if getter:
-            try:
-                data = getter() or {}
-                return dict(data) if isinstance(data, dict) else {}
-            except Exception:
-                return {}
-        return dict(self._form_mem)
+        return dict(self._graph_forms or {})
 
     def _form_save_all(self, data: dict) -> None:
-        setter = self.form_fn.get("set") if isinstance(self.form_fn, dict) else None
-        if setter:
-            try:
-                setter(data or {})
-                return
-            except Exception as e:
-                logger.warning("表单状态保存失败: %s", e)
-        self._form_mem = dict(data or {})
+        self._graph_forms = dict(data or {})
+        self._graph_forms_dirty = True
 
     def _form_values(self, skill: str) -> dict:
         blob = (self._form_all().get(skill) or {})
@@ -696,25 +782,20 @@ class Agent:
             return ""
         return render_for_ai(schema, self._form_values(skill))
 
-    def _store_form_answer(self, question: str, answer: str) -> None:
-        from .form_state import match_answer
-        skill = str(self.current_skill or "")
-        if not skill:
-            return
-        schema = self._form_schema(skill)
-        if not schema:
-            return
-        values = self._form_values(skill)
-        hit = match_answer(schema, values, question, answer)
-        if not hit:
-            return
-        field, val = hit
-        values[field] = val
-        self._form_set_values(skill, values)
+    def _enforce_skill_lock(self, skill: str) -> str | None:
+        try:
+            from .dialogue.skill_lock import enforce
+            return enforce(self.current_skill, skill)
+        except Exception:
+            return None
+
+    def _maybe_lock_skill(self, skill: str, reason: str) -> None:
+        if not self.current_skill:
+            self.current_skill = skill
 
     async def _apply_form(self, skill: str, params: dict) -> dict:
         """把会话表单状态补进本次参数，并尝试自动补 auto 字段。"""
-        from .form_state import collect_from_params, filled, merge_into_params
+        from .form_state import collect_from_params, merge_into_params
         schema = self._form_schema(skill)
         if not schema:
             return params
@@ -1081,24 +1162,40 @@ class Agent:
 
     async def _ask(self, question: str, image: str | None = None,
                    options: list[str] | None = None) -> str:
-        """问用户。image 为可选验证码图片（base64），options 为建议选项（App 点选按钮）。
+        """问用户：confirm / 登录 / 验证码等，统一走 LangGraph interrupt()。"""
+        import uuid
+        from .graph_native import register_active_ask
+        from langgraph.types import interrupt
 
-        铁律（2026-08-16）：ask_user 通道缺失或异常 → 直接抛错暴露，不静默返回空串。
-        """
-        # 显式带图提问（login_flow 直接传图）时也清掉暂存验证码图，
-        # 避免 get_graphical_captcha 残留的旧图被后续 LLM ask_user 误带
         if image is not None:
             self._pending_image = None
-        if not self.ask_user_fn:
-            raise RuntimeError("ask_user 通道未注入（无法向客户提问）")
+        img = image or self._pending_image
+        if img:
+            self._pending_image = None
+
+        ask_id = uuid.uuid4().hex[:8]
         opts = [str(x) for x in (options or []) if str(x).strip()]
+        push = self.graph_hooks.get("push_ask")
+        if not push:
+            raise RuntimeError("graph push_ask 未注入，无法向用户提问")
+        await push(str(question), ask_id, opts, img)
+        register_active_ask(self.email, ask_id)
+
+        payload = {
+            "ask_id": ask_id,
+            "question": str(question),
+            "options": opts,
+            "kind": "inline",
+        }
         try:
-            if image:
-                return str(await self.ask_user_fn(question, image, opts)).strip()
-            return str(await self.ask_user_fn(question, options=opts)).strip()
+            raw = interrupt(payload)
         except Exception as e:
-            logger.exception("ask_user 异常: %s", e)
+            logger.exception("interrupt 提问异常: %s", e)
             raise
+        on_answer = self.graph_hooks.get("on_answer")
+        if on_answer:
+            await on_answer(str(raw or ""))
+        return str(raw or "").strip()
 
     async def _web_search(self, query: str) -> dict:
         from ..config import get as cfg_get

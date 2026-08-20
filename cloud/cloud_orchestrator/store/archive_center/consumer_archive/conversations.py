@@ -35,11 +35,6 @@ class Conversation:
     type: str = "chat"              # chat / skill
     persona: dict[str, Any] = field(default_factory=dict)  # 会话人设 = 引用上台卡 {person_id, person_name, skills[]}（只挂 id）
     messages: list[dict[str, Any]] = field(default_factory=list)  # [{who,text,img,at}]
-    # 会话级执行进度（update_todo_list 轻量版）：跨轮续办记忆落在这里，
-    # [{step,title,status}]，随会话持久化，不随单次任务卡片（TaskState）销毁。
-    steps: list[dict[str, Any]] = field(default_factory=list)
-    # 契约 form 字段表的会话状态：{skill_id: {field: value}}，资料卡字段不上云
-    forms: dict[str, dict[str, Any]] = field(default_factory=dict)
     pinned: bool = False
     deleted: bool = False           # 软删标记（当前流程硬删，保留字段备用）
     created_at: float = 0.0
@@ -58,8 +53,6 @@ class Conversation:
             type=str(d.get("type") or "chat"),
             persona=d.get("persona") if isinstance(d.get("persona"), dict) else {},
             messages=d.get("messages") if isinstance(d.get("messages"), list) else [],
-            steps=d.get("steps") if isinstance(d.get("steps"), list) else [],
-            forms=d.get("forms") if isinstance(d.get("forms"), dict) else {},
             pinned=bool(d.get("pinned")),
             deleted=bool(d.get("deleted")),
             created_at=float(d.get("created_at") or 0),
@@ -134,48 +127,6 @@ class ConversationStore:
             out.append(Conversation.from_dict(d))
         out.sort(key=lambda c: (c.pinned, c.updated_at), reverse=True)
         return out
-
-    def get_steps(self, conversation_id: str) -> list[dict]:
-        """读会话级执行进度（跨轮续办记忆）。无会话/无进度 → []。"""
-        d = self._data.get(conversation_id)
-        if not d or d.get("deleted"):
-            return []
-        steps = d.get("steps")
-        return steps if isinstance(steps, list) else []
-
-    def set_steps(self, conversation_id: str, steps: list[dict]) -> bool:
-        """覆盖写会话级执行进度（跨轮续办记忆落库）。写入失败返回 False。"""
-        d = self._data.get(conversation_id)
-        if not d or d.get("deleted"):
-            return False
-        d["steps"] = list(steps or [])
-        d["updated_at"] = time.time()
-        self._save()
-        return True
-
-    def get_forms(self, conversation_id: str) -> dict:
-        """读会话级表单状态 {skill: {field: value}}。"""
-        d = self._data.get(conversation_id)
-        if not d or d.get("deleted"):
-            return {}
-        forms = d.get("forms")
-        return dict(forms) if isinstance(forms, dict) else {}
-
-    def set_forms(self, conversation_id: str, forms: dict) -> bool:
-        """覆盖写会话级表单状态。"""
-        d = self._data.get(conversation_id)
-        if not d or d.get("deleted"):
-            return False
-        clean: dict = {}
-        for sid, vals in (forms or {}).items():
-            key = str(sid or "").strip()
-            if not key or not isinstance(vals, dict):
-                continue
-            clean[key] = dict(vals)
-        d["forms"] = clean
-        d["updated_at"] = time.time()
-        self._save()
-        return True
 
     def append_message(self, conversation_id: str, msg: dict) -> bool:
         d = self._data.get(conversation_id)

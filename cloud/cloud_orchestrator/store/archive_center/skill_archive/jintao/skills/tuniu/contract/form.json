@@ -1,0 +1,11 @@
+{
+  "form": [
+    { "field": "departure", "label": "出发城市", "source": "customer", "type": "text" },
+    { "field": "arrival", "label": "到达城市", "source": "customer", "type": "text" },
+    { "field": "date", "label": "出行日期", "source": "customer", "type": "date" },
+    { "field": "train_num", "label": "车次号", "source": "customer", "type": "text" },
+    { "field": "seat_name", "label": "席别", "source": "customer", "type": "text" },
+    { "field": "contact_tel", "label": "联系人手机号", "source": "customer", "type": "text" },
+    { "field": "passengers", "label": "乘客信息", "source": "customer", "type": "text" }
+  ]
+}

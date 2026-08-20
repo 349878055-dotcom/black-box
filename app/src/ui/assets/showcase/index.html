@@ -95,7 +95,7 @@
 
     .card {
       display: grid;
-      grid-template-columns: 28px 52px 1fr;
+      grid-template-columns: 28px 1fr;
       gap: 10px; align-items: center;
       width: 100%; text-align: left;
       background: var(--card);
@@ -116,7 +116,7 @@
       display: grid; place-items: center;
       font-family: var(--display); font-size: 20px; font-weight: 700; color: #0b0d12;
     }
-    .card h3 { font-size: 16px; font-weight: 700; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .card h3 { font-size: 16px; font-weight: 700; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
     .card p { font-size: 12px; color: var(--muted); margin-top: 3px; line-height: 1.45; }
     .meta { font-size: 11px; color: var(--faint); margin-top: 4px; }
     .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
@@ -136,7 +136,7 @@
 
     .person-head { padding: calc(10px + var(--safe-t)) 12px 8px; display: flex; align-items: center; gap: 8px; }
     .back { width: 36px; height: 36px; border-radius: 10px; background: rgba(255,255,255,.06); }
-    .who { display: flex; gap: 14px; align-items: center; margin-bottom: 12px; }
+    .who { display: flex; gap: 20px; align-items: center; margin-bottom: 16px; padding-top: 8px; }
     .who .avatar { width: 64px; height: 64px; font-size: 24px; border-radius: 20px; }
     .stats {
       display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin: 12px 0 4px;
@@ -169,8 +169,12 @@
       background: linear-gradient(135deg, #7b94ff, #4f6ef5);
       font-weight: 700; font-size: 15px; width: 100%;
     }
+    .cta-wrap {
+      position: absolute; left: 0; right: 0; bottom: 0;
+      padding: 12px 20px calc(16px + var(--safe-b));
+      background: linear-gradient(to top, #0b0d12 70%, transparent);
+    }
     .cta {
-      position: absolute; left: 16px; right: 16px; bottom: calc(16px + var(--safe-b));
       box-shadow: 0 8px 24px rgba(79,110,245,.35);
     }
     .btn { margin-top: 8px; }
@@ -195,14 +199,10 @@
       <div class="screen">
 
         <section class="page is-on" id="page-hall">
-          <div class="top">
-            <div class="brand"><span class="brand-dot"></span><span>才艺</span></div>
-            <h1>周家在场</h1>
-            <p class="lead">家里人各会一样。选一位，回去跟 TA 说话。</p>
-          </div>
+          <div class="top"></div>
           <label class="search">
             <span aria-hidden="true">⌕</span>
-            <input id="q" type="search" placeholder="搜家人，或搜挂号、买票、外卖…" />
+            <input id="q" type="search" placeholder="搜索挂号、买票、外卖…" />
           </label>
           <div class="sorts" id="cats"></div>
           <div class="sorts" id="sorts">
@@ -210,7 +210,7 @@
             <button type="button" data-sort="week">本周热门</button>
             <button type="button" data-sort="rating">好评优先</button>
           </div>
-          <p class="hint" id="hint">才艺挂在家人下面</p>
+          <p class="hint" id="hint"></p>
           <div class="list" id="list"></div>
         </section>
 
@@ -222,99 +222,7 @@
 
   <script>
     const DEFAULT_BASE = "http://140.143.144.28";
-    // 兜底名单 person_id 必须与云端 store/archive_center/skill_archive/seed/cards.json 一致
-    const FALLBACK = [
-      {
-        id: "zhang",
-        name: "张医生",
-        initial: "张",
-        color: "linear-gradient(145deg,#c9d4ff,#6b8cff)",
-        tagline: "南京鼓楼挂号，帮人跑过很多次",
-        city: "南京",
-        tags: ["挂号", "医疗"],
-        rating: 4.9,
-        jobs: 328,
-        week: 41,
-        greeting: "我是张。鼓楼医院挂号我熟。你说要挂哪科、哪天就行。",
-        skills: [
-          { id: "glyy", label: "鼓楼医院挂号", how: "问清科室和日期，帮你挂专家号", intents: ["鼓楼", "挂号", "挂专家", "看医生", "专家号"] }
-        ],
-        experience: [
-          { title: "先问清楚再挂", note: "科室、日期、专家还是普通号，问齐了再动手。" },
-          { title: "少让人空跑", note: "信息不齐不提交，避免占号。" }
-        ],
-        comments: [
-          { user: "王**", rating: 5, text: "帮我妈挂上了专家号，一路问得很清楚。", time: "3天前" }
-        ]
-      },
-      {
-        id: "lin",
-        name: "小林",
-        initial: "林",
-        color: "linear-gradient(145deg,#d4c2ff,#7a62e8)",
-        tagline: "常跑沪宁线，查完票帮你走到付钱",
-        city: "上海",
-        tags: ["出行", "火车票"],
-        rating: 4.7,
-        jobs: 190,
-        week: 28,
-        greeting: "我是小林。查车次、代下单我来；你确认行程，去支付宝付钱。",
-        skills: [
-          { id: "tuniu", label: "火车票代下单", how: "确认日期和席别后再下单，滑块时会停下来让你配合", intents: ["火车票", "买票", "高铁", "车次", "出行", "机票"] }
-        ],
-        experience: [
-          { title: "先确认日期和席别", note: "上海到南京这趟常坐，买错车最烦。" },
-          { title: "风控要真人配合", note: "下单若要滑块，会停下来让你划一下。" }
-        ],
-        comments: [
-          { user: "吴**", rating: 5, text: "周五下班那趟票帮我盯到了。", time: "2天前" }
-        ]
-      },
-      {
-        id: "liu",
-        name: "刘姐",
-        initial: "刘",
-        color: "linear-gradient(145deg,#b8f0d8,#3ecf8e)",
-        tagline: "浦口中医院挂号，送到支付宝你自己付",
-        city: "浦口",
-        tags: ["挂号", "医疗"],
-        rating: 4.8,
-        jobs: 86,
-        week: 19,
-        greeting: "我是刘姐。浦口中医院挂号送到支付宝确认页，你自己付钱。",
-        skills: [
-          { id: "njpkzyy", label: "浦口中医院挂号", how: "送到支付宝确认页，你自己付钱", intents: ["浦口", "中医院", "挂号"] }
-        ],
-        experience: [
-          { title: "送到确认页为止", note: "登录和付钱都在支付宝里，不代付。" }
-        ],
-        comments: [
-          { user: "陈**", rating: 5, text: "浦口那次直接送到支付宝确认页，自己付的。", time: "1周前" }
-        ]
-      },
-      {
-        id: "ning",
-        name: "阿宁",
-        initial: "宁",
-        color: "linear-gradient(145deg,#ffd4b8,#ff8a5b)",
-        tagline: "找店、看菜单，送进美团自己点",
-        city: "杭州",
-        tags: ["外卖", "餐饮"],
-        rating: 4.6,
-        jobs: 64,
-        week: 22,
-        greeting: "我是阿宁。帮你找到店，再送进美团自己点。我不代登录。",
-        skills: [
-          { id: "meituan_waimai", label: "美团外卖找店", how: "只送到店，登录和付钱都在美团里", intents: ["外卖", "点餐", "美团", "吃饭", "附近"] }
-        ],
-        experience: [
-          { title: "只送到店，不代下单", note: "登录和付钱都在美团里，这是边界。" }
-        ],
-        comments: [
-          { user: "周**", rating: 5, text: "找到店就推进美团了，干净。", time: "4天前" }
-        ]
-      }
-    ];
+    const FALLBACK = [];
     let CARDS = FALLBACK.slice();
 
     const CATS = ["全部", "挂号", "出行", "外卖"];
@@ -383,10 +291,10 @@
       const anyQ = String(q || "").trim();
       const hits = rows.filter((r) => r.hit);
       $("hint").textContent = anyQ
-        ? (hits.length ? "对上了：" + hits.map((r) => r.person.name).join("、") : "家里暂时没人对上")
+        ? (hits.length ? "对上了：" + hits.map((r) => r.person.name).join("、") : "暂无匹配结果")
         : ({ score: "综合 = 完成单 × 好评", week: "按本周完成单排", rating: "按评分排" }[state.sort]);
       if (!rows.length) {
-        $("list").innerHTML = `<div class="empty">这一类暂时还没有家人在场。</div>`;
+        $("list").innerHTML = `<div class="empty">暂无此类服务。</div>`;
         return;
       }
       $("list").innerHTML = rows.map(({ person: p, hit }) => {
@@ -397,9 +305,8 @@
         return `
           <button class="card${top}${dim}" type="button" data-open="${p.id}">
             <div class="rank-n">${rank}</div>
-            <div class="avatar" style="background:${p.color}">${p.initial}</div>
             <div>
-              <h3>${p.name}${rank === 1 ? ' <span class="badge gold">榜首</span>' : ""}</h3>
+              <h3>${p.name}${rank === 1 ? ' <span class="badge gold" style="margin-left:8px">榜首</span>' : ""}</h3>
               <p>${p.tagline}</p>
               <div class="meta">${stars(p.rating)} ${p.rating} · ${p.jobs} 单 · ${commentsN(p)} 评</div>
               <div class="chips">${p.skills.map((s) => `<span class="chip">${s.label}</span>`).join("")}</div>
@@ -425,17 +332,10 @@
         </div>`).join("") || `<p>还没有评论。</p>`;
 
       $("page-person").innerHTML = `
-        <div class="person-head">
-          <button class="back" type="button" data-go="hall">←</button>
-          <div class="brand" style="letter-spacing:.06em;text-transform:none">家人</div>
-        </div>
+        <div class="person-head"></div>
         <div class="person-body">
-          <div class="who">
-            <div class="avatar" style="background:${p.color}">${p.initial}</div>
-            <div>
-              <h1 style="font-size:24px;margin:0">${p.name}</h1>
-              <p class="lead">${p.city} · ${p.tagline}</p>
-            </div>
+          <div class="who" style="justify-content:center">
+            <div class="avatar" style="background:${p.color};width:80px;height:80px;font-size:32px;border-radius:24px">${p.initial}</div>
           </div>
           <div class="stats">
             <div class="stat"><b>${Number(p.rating || 0).toFixed(1)}</b><span>评分</span></div>
@@ -465,7 +365,7 @@
               </div>`               : `<p class="note">跟 TA 说过话之后才能评价。</p>`}
           </div>
         </div>
-        <button class="cta" type="button" data-chat="${p.id}">跟 ${p.name} 说话</button>
+        <div class="cta-wrap"><button class="cta" type="button" data-chat="${p.id}">跟 ${p.name} 说话</button></div>
       `;
     }
 
@@ -594,8 +494,13 @@
 
     window.addEventListener("message", (e) => {
       const d = e && e.data;
-      if (!d || d.type !== "showcase:config") return;
-      boot(d.base || "");
+      if (!d) return;
+      if (d.type === "showcase:config") { boot(d.base || ""); return; }
+      if (d.type === "showcase:back") {
+        if (state.page === "person") { show("hall"); }
+        else { window.parent.postMessage({ type:"showcase:exit" }, "*"); }
+        return;
+      }
     });
 
     renderCats();

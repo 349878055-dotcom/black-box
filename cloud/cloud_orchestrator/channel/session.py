@@ -23,6 +23,8 @@ class Session:
         self.plan: list[dict] = []
         # 是否在等待用户输入
         self.waiting_for_user = False
+        # 设备标识（WS session_ready 注册时写入；供 bridge 按 email 找回活跃连接）
+        self.email: str | None = None
 
     def is_expired(self, max_age_sec: int = 300) -> bool:
         """检查会话是否过期（默认 5 分钟无活动）"""
@@ -83,6 +85,20 @@ class SessionManager:
             if session.websocket == websocket:
                 return session
         return None
+
+    def get_by_email(self, email: str) -> Session | None:
+        """按 email 查找活跃会话（供 bridge 在注册状态丢失时自动恢复）。
+
+        返回最近活跃的匹配会话；无匹配返回 None。
+        """
+        if not email:
+            return None
+        best: Session | None = None
+        for session in self._sessions.values():
+            if session.email == email:
+                if best is None or session.last_active > best.last_active:
+                    best = session
+        return best
 
     def destroy(self, session_id: str):
         """销毁会话"""

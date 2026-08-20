@@ -100,6 +100,13 @@ def _load_config():
         _CONFIG["qwen_api_key"] = str(qwen["api_key"])
         _CONFIG["bailian_api_key"] = str(qwen["api_key"])
         _CONFIG["vision_api_key"] = str(qwen["api_key"])
+    # 视觉模型（云端看图员）单独从 bailian 段读：base_url/model（key 与 qwen 共用）
+    bailian_cfg = data.get("bailian") or {}
+    if bailian_cfg.get("api_key"):
+        _CONFIG["bailian_base_url"] = str(
+            bailian_cfg.get("base_url") or "https://dashscope.aliyuncs.com/compatible-mode/v1")
+        _CONFIG["bailian_model"] = str(
+            bailian_cfg.get("model") or "qwen3-vl-flash")
 
 
 def get(key: str, default=None):

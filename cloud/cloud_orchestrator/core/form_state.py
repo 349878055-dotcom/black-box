@@ -55,24 +55,6 @@ def collect_from_params(schema: list[dict], values: dict, params: dict) -> dict:
     return values
 
 
-def match_answer(schema: list[dict], values: dict, question: str,
-                 answer: str) -> tuple[str, str] | None:
-    """把 ask_user 的回答记到还没填的 customer 字段（按问题里的 label 对上；只缺一项就记那一项）。"""
-    if not (answer or "").strip():
-        return None
-    missing = [it for it in schema
-               if it["source"] == "customer" and not filled((values or {}).get(it["field"]))]
-    if not missing:
-        return None
-    q = question or ""
-    hits = [it for it in missing if it["label"] and it["label"] in q]
-    if len(hits) == 1:
-        return hits[0]["field"], answer.strip()
-    if len(missing) == 1:
-        return missing[0]["field"], answer.strip()
-    return None
-
-
 def render_for_ai(schema: list[dict], values: dict) -> str:
     """给 read_skill：已填 / 还缺；每轮只强调没填的。"""
     if not schema:

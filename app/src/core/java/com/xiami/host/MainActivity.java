@@ -24,6 +24,8 @@ import android.view.View;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.net.http.SslError;
+import android.graphics.BitmapFactory;
+import android.speech.RecognizerIntent;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.SslErrorHandler;
@@ -63,6 +65,7 @@ public class MainActivity extends Activity {
     private static final int CHAT_FILE_REQUEST = 1002;   // 聊天窗口选文件上传
     private static final int PHOTO_REQUEST = 1003;       // 聊天窗口拍照上传
     private static final int PHOTO_PICK_REQUEST = 1004;  // 资料卡证件照选择
+    private static final int SPEECH_REQUEST = 1005;      // 语音转文字（系统语音识别）
     private Uri photoUri = null;                          // 聊天拍照输出 Uri
     private String pendingPhotoCbId = null;              // 证件照回调 id
     private String pendingPhotoCard = "";                // 属于哪张资料卡
@@ -474,6 +477,21 @@ public class MainActivity extends Activity {
             }
             return;
         }
+        if (requestCode == SPEECH_REQUEST) {
+            String text = "";
+            String err = "";
+            if (resultCode == RESULT_OK && data != null) {
+                java.util.ArrayList<String> results =
+                        data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS);
+                if (results != null && !results.isEmpty()) text = results.get(0);
+            } else {
+                err = "语音识别取消或失败";
+            }
+            final String js = "window.__speechResult && window.__speechResult("
+                    + JSONObject.quote(text) + "," + JSONObject.quote(err) + ")";
+            uiWeb.post(() -> uiWeb.evaluateJavascript(js, null));
+            return;
+        }
         super.onActivityResult(requestCode, resultCode, data);
     }
 
@@ -509,7 +527,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** 原生读文件 → base64 回传 ui.html（window.__fileChosen），用于聊天上传云端。 */
+    /** 原生读文件 → base64 回传 ui.html（window.__fileChosen），用于聊天上传云端（AI 读图）。 */
     private void sendFileToUi(Uri uri) {
         try (InputStream is = getContentResolver().openInputStream(uri)) {
             byte[] bytes = new byte[is.available()];
@@ -519,6 +537,8 @@ public class MainActivity extends Activity {
                 if (r < 0) break;
                 off += r;
             }
+            // 图片本地压缩（省流量 + AI 读图）：缩放最大边 1280、JPEG 质量 80
+            bytes = compressImage(bytes);
             String name = "";
             String mime = getContentResolver().getType(uri);
             try (android.database.Cursor c = getContentResolver().query(uri, null, null, null, null)) {
@@ -532,6 +552,32 @@ public class MainActivity extends Activity {
             uiWeb.evaluateJavascript(js, null);
         } catch (Exception e) {
             Log.w(TAG, "read uri err", e);
+        }
+    }
+
+    /** 图片本地压缩：解码 → 缩放（最大边 1280）→ JPEG 质量 80。非图片/失败原样返回。 */
+    private byte[] compressImage(byte[] data) {
+        if (data == null || data.length == 0) return data;
+        try {
+            android.graphics.Bitmap bmp = BitmapFactory.decodeByteArray(data, 0, data.length);
+            if (bmp == null) return data;
+            int maxSide = 1280;
+            int w = bmp.getWidth(), h = bmp.getHeight();
+            if (w > maxSide || h > maxSide) {
+                float scale = Math.min((float) maxSide / w, (float) maxSide / h);
+                int nw = Math.max(1, (int) (w * scale));
+                int nh = Math.max(1, (int) (h * scale));
+                android.graphics.Bitmap scaled = android.graphics.Bitmap.createScaledBitmap(bmp, nw, nh, true);
+                if (scaled != bmp) bmp.recycle();
+                bmp = scaled;
+            }
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, bos);
+            bmp.recycle();
+            return bos.toByteArray();
+        } catch (Exception e) {
+            Log.w(TAG, "compress err", e);
+            return data;
         }
     }
 
@@ -807,6 +853,24 @@ public class MainActivity extends Activity {
                 i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 startActivity(i);
             } catch (Exception ignore) {}
+        }
+
+        /** 语音转文字：点麦克风 → 系统语音识别 → 回调 ui.html window.__speechResult(text, err)。 */
+        @JavascriptInterface
+        public void speechToText() {
+            runOnUiThread(() -> {
+                try {
+                    Intent i = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+                    i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+                    i.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "zh-CN");
+                    i.putExtra(RecognizerIntent.EXTRA_PROMPT, "请说话…");
+                    startActivityForResult(i, SPEECH_REQUEST);
+                } catch (Exception e) {
+                    Log.w(TAG, "speech start err", e);
+                    uiWeb.post(() -> uiWeb.evaluateJavascript(
+                            "window.__speechResult && window.__speechResult('','语音识别不可用，请检查系统语音服务');", null));
+                }
+            });
         }
 
         /** 切换当前云端账号：凭据库按 email 隔离读写。登录/恢复会话时由 ui.html 调用。 */

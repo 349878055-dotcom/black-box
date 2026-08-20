@@ -204,3 +204,42 @@
 ## 九、一句话
 
 **第 0 步（铁律）= 在微信缓存里挖出「公开 H5 接口 + H5 请求头」（不是微信请求头），用它摸索下单：能返回支付连接 → 做登录态 + 下单 + 支付（A）；返回不了 → 只搜索 + 给链接、不做登录态、客户自己登录（C）；只有微信小程序格式的极少平台 → 先用微信请求头实测能否拉起支付。** 这是每个 skill 的定性标准，先定死再往下做。
+
+---
+
+## 十、skill 契约必带 form 表（跨轮记忆标配，2026-08-20）
+
+> 需要收集客户信息的 skill（订票/挂号/外卖等要填表的）**契约里必须带 `contract/form.json` 登记表**，
+> 否则虾米的「跨轮记忆」机制（form_state：ask_user 回答填一个存一个、下次自动补参、
+> read_skill 告知已填/还缺）对该 skill 不生效 → 模型会反复问已给信息（如途牛反复问「出发城市」）。
+
+### 为什么必须带
+
+- `methods.json` 的 `customer_input` 只是「菜单」——告诉模型要问哪些；
+- `form.json` 是「登记本」——让系统把问到的答案**持久化存起来、跨轮/续跑自动补**；
+- 只写 `customer_input` 不写 `form` → 系统记不住 → 跨轮/续跑模型重新问（2026-08-20 实测发现）。
+
+### 格式（`contract/form.json`）
+
+```json
+{
+  "form": [
+    { "field": "departure", "label": "出发城市", "source": "customer", "type": "text" },
+    { "field": "date", "label": "出行日期", "source": "customer", "type": "date" }
+  ]
+}
+```
+
+- `source=customer`：要 ask_user 问客户，答案存入跨轮状态；只问还没填的；
+- `source=auto` + `from=方法名`：代码自动补（如城市代码 resolve_city_code）；
+- `source=profile`：客户资料卡自动填，不必问；
+- 字段名尽量与各方法 params 对齐（不同方法参数名不一致时，以查询方法为准，系统按需补）。
+
+### 配套
+
+- 读取代码：`store/archive_center/skill_archive/__init__.py` 的 `load_contract_parts` 已支持读 `form.json`（2026-08-20 新增）。
+- 生效检查：`get_contract(skill)["form"]` 非空即生效。
+
+### 新 skill 生产 checklist 加一项
+
+- [ ] `contract/form.json` 已登记所有需要客户填的 customer 字段（有 `customer_input` 就必有对应 `form`）

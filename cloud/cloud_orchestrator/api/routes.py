@@ -39,6 +39,15 @@ class ChatRequest(BaseModel):
     message: str
     session_id: str = ""   # 会话 ID（选填，缺省用 default）
     ask_id: str = ""       # ask_user 回答标识；带上时若匹配等待中的任务，则作为回答处理
+    image: str = ""        # 聊天附件图片（base64，可选）：云端识别成文字并入消息
+
+
+class TestChatBody(BaseModel):
+    """测试专用同步对话（2026-08-20）：发消息 → 同步等到 done/failed/waiting_user，
+    一次调用返回完整结果，不用轮询 task，适合脚本自问自答。"""
+    message: str = ""
+    session_id: str = ""
+    ask_id: str = ""       # 带 = 回答上一个 ask；不带 = 新消息
 
 
 class MeUpdate(BaseModel):
@@ -136,16 +145,41 @@ async def chat(request: Request, body: ChatRequest):
     匹配成功则不再开新任务。
     """
     msg = (body.message or "").strip()
+    image = (body.image or "").strip()
+    # 聊天附件图片：云端看图员识别成文字，并入消息（图不留存，只留识别文字）
+    if image:
+        try:
+            from ..core.vision import describe_image
+            ocr = describe_image(image)
+            if ocr:
+                img_txt = "[用户发送了一张图片，识别内容：\n" + ocr + "]"
+            else:
+                img_txt = "[用户发送了一张图片，但未能识别出内容]"
+            msg = f"{msg}\n{img_txt}".strip() if msg else img_txt
+        except Exception as e:
+            logger = __import__("logging").getLogger("xiami.routes")
+            logger.warning("图片识别异常: %s", e)
     from ..core.master import master
 
     # 契约（问题13）：HTTP 侧 email = 登录 email；前端连 /api/v1/ws 时必须用同一 email
     # 作为 email 注册（session_ready），否则 bridge 找不到设备，skill_run / ask_user 推送会失败。
     email = _my_email(request) or "anon"
     ask_id = (body.ask_id or "").strip()
+    from ..core.master import feed_answer
     if ask_id:
-        from ..core.master import feed_answer
-        # 铁律（2026-08-16）：回答路由不静默吞异常，暴露 ask_id 链路问题
         if feed_answer(email, ask_id, msg):
+            return {"status": "ok", "reply": "", "task": None, "answered": True}
+        task = master.get_task(email)
+        if task.get("status") == "waiting_user":
+            logger = __import__("logging").getLogger("xiami.routes")
+            logger.warning("ask_id 已过期，未当作新消息 device=%s ask_id=%s", email, ask_id)
+            return {"status": "ok", "reply": "", "task": task, "answered": False, "stale_ask": True}
+    else:
+        # 打断喂回（Zoo 式，2026-08-20）：waiting_user 时用户发新消息（无 ask_id，
+        # 如「等等，周五也加上」）→ 走「唯一等待」兜底喂回当前 ask，让模型在同一
+        # 循环里处理用户改口/打断，而非被 busy 吞掉（历史问题5）。无等待任务时
+        # feed_answer 返回 False，正常走 submit。
+        if feed_answer(email, "", msg):
             return {"status": "ok", "reply": "", "task": None, "answered": True}
     if not msg:
         return {"status": "ok", "reply": "", "task": None}
@@ -153,6 +187,50 @@ async def chat(request: Request, body: ChatRequest):
     conv_id = (body.session_id or "").strip() or "default"
     out = master.submit(email, message=msg, user_id=user_id, conversation_id=conv_id)
     return {"status": "ok", "task": out.get("task")}
+
+
+@router.post("/api/v1/test/chat")
+async def test_chat(request: Request, body: TestChatBody):
+    """测试专用：发消息并【同步等待】到 done/failed/cancelled/idle/waiting_user。
+
+    - 不带 ask_id → 提交新消息（会话须已建好，测试脚本先建会话）；
+    - 带 ask_id    → 作为对上一个 ask_user 的回答喂回（feed_answer）；
+    - 等待到终态（含 waiting_user）一次性返回完整 task {status, reply, ask, steps}，
+      让脚本不用轮询、回应不丢、测试更快。
+    """
+    import asyncio
+
+    from ..core.master import master, feed_answer
+
+    email = _my_email(request) or "anon"
+    msg = (body.message or "").strip()
+    conv_id = (body.session_id or "").strip() or "default"
+    ask_id = (body.ask_id or "").strip()
+    fed = False
+    if ask_id:
+        fed = feed_answer(email, ask_id, msg)
+    else:
+        user_id = getattr(request.state, "user_id", "") or email
+        master.submit(email, message=msg, user_id=user_id, conversation_id=conv_id)
+    # 同步等待到终态（waiting_user 也返回，脚本据此带 ask_id 代答）。
+    # 注意竞态：feed 回答后，任务会先 running（模型处理「回答」）再出新 ask/done；
+    # 若只等「waiting_user」会立刻返回旧的 ask（还没推进）。所以：
+    #   - submit 新消息（prev_ask_id=None）：等首个 ask 或 done；
+    #   - feed 回答（prev_ask_id=旧 ask_id）：等 ask_id 变化（推进到新 ask）或 done/failed。
+    deadline = time.time() + 90
+    prev_ask_id = ask_id or None
+    last = master.get_task(email)
+    while time.time() < deadline:
+        last = master.get_task(email)
+        st = last.get("status")
+        cur_ask_id = str((last.get("ask") or {}).get("ask_id") or "")
+        if st in ("done", "failed", "cancelled", "idle"):
+            break
+        if st == "waiting_user":
+            if prev_ask_id is None or cur_ask_id != prev_ask_id:
+                break
+        await asyncio.sleep(0.3)
+    return {"ok": True, "conv_id": conv_id, "answered": fed, "task": last}
 
 
 @router.get("/api/v1/task")

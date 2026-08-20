@@ -1,0 +1,5 @@
+{
+  "form": [
+    { "field": "keyword", "label": "店铺搜索词", "source": "customer", "type": "text" }
+  ]
+}

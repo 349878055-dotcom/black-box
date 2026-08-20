@@ -42,7 +42,7 @@ async def run_login(skill: str, login_cfg: dict, email: str,
                 timeout=LOGIN_TOTAL_TIMEOUT)
         if method == "browser":
             return await asyncio.wait_for(
-                _browser(skill, cfg, email, ask),
+                _browser(skill, cfg, email, ask, owner_id=owner_id),
                 timeout=LOGIN_TOTAL_TIMEOUT)
     except asyncio.TimeoutError:
         logger.warning("登录流程总超时 skill=%s method=%s（>%ss）",
@@ -190,13 +190,26 @@ async def _sms_verify(skill: str, cfg: dict, email: str, ask, phone: str = "",
     return True
 
 
-async def _browser(skill: str, cfg: dict, email: str, ask) -> bool:
-    """内置浏览器真人登录：可选清 cookie / 预检 → navigate → 真人操作 → 导出登录态。"""
+async def _browser(skill: str, cfg: dict, email: str, ask, owner_id: str = "") -> bool:
+    """内置浏览器真人登录：清 cookie / 预检 → navigate 打开登录页 → 真人登录 →
+    导出登录态 →（可选）verify 校验真登录；支持「没登上」重试循环。
+
+    设计（供应商自治）：打开登录页/存 cookie 是手机通用原子能力，登录编排是云端通用
+    解释器；skill 只在本平台 login.json 里声明 url / export / verify / max_attempts /
+    interact，云端不为任何一家写死登录逻辑。
+    """
     from ..channel.bridge import bridge
     interact = cfg.get("interact") or {}
     export = cfg.get("export") or {}
     url = cfg.get("url", "")
     domain = (export.get("domain") or url or "").strip()
+    max_tries = int(cfg.get("max_attempts") or 3)
+    verify_method = str(cfg.get("verify") or "").strip()
+    guide = interact.get("guide",
+                         "已在内置浏览器打开登录页，请完成登录后回复「已登录」。")
+    fail_hint = interact.get(
+        "fail_hint",
+        "若登录失败，可直接在浏览器刷新重来，或回复「没登上」，我重新打开登录页。")
 
     # 可选：先清残留 cookie（防登录页重定向回首页）
     if email and cfg.get("clear_cookies"):
@@ -214,29 +227,79 @@ async def _browser(skill: str, cfg: dict, email: str, ask) -> bool:
         except Exception as e:
             logger.warning("%s precheck 失败: %s", skill, e)
 
-    if email and url:
-        try:
-            await bridge.send_cmd(email, "navigate", {"url": url})
-        except Exception as e:
-            logger.warning("%s navigate 打开登录页失败: %s", skill, e)
-    await ask(interact.get("guide",
-              "已在内置浏览器打开登录页，请完成登录后回复「已登录」。"))
-    if email and export.get("cmd"):
-        try:
-            # 透传 export 配置（domain/skill 等），缺 skill 时用当前平台 id，保证凭据写入正确卡片
+    for attempt in range(1, max_tries + 1):
+        # navigate 打开登录页（失败要明确提示，不假装已打开）
+        if email and url:
+            # 诊断日志：记录 navigate 发出与返回，用于定位「浏览器不弹」的根因
+            logger.info("%s [诊断] 准备 navigate 打开登录页 url=%s（第 %d/%d 次）",
+                        skill, url, attempt, max_tries)
+            nav_res = {}
+            try:
+                nav_res = await bridge.send_cmd(email, "navigate", {"url": url})
+            except Exception as e:
+                logger.warning("%s navigate 异常: %s", skill, e)
+            logger.info("%s [诊断] navigate 返回: %s", skill, str(nav_res)[:300])
+            if isinstance(nav_res, dict) and not nav_res.get("ok"):
+                err = str(nav_res.get("error") or "") if isinstance(nav_res, dict) else ""
+                await ask(f"内置浏览器打开登录页失败（{err or '未知原因'}），请稍后重试或检查网络。")
+                return False
+
+        # ask 引导（第 1 次用标准话术；重试时提示次数）
+        prompt = guide if attempt == 1 else f"（第{attempt}次）请再次完成登录：\n{guide}"
+        prompt = f"{prompt}\n{fail_hint}"
+        reply = (await ask(prompt)).strip()
+        # 客户明确表示没登上 → 重新打开登录页再试
+        if reply and any(x in reply for x in ("没登上", "没登录", "登录失败", "登不上", "不行", "重来", "再来")):
+            logger.info("%s 客户反馈未登录成功（第 %d 次），重新打开登录页", skill, attempt)
+            continue
+
+        # 导出登录态（cookie/token 存手机凭据库）
+        if email and export.get("cmd"):
             exp_params = {k: v for k, v in export.items() if k != "cmd"}
             if not exp_params.get("skill"):
                 exp_params["skill"] = skill
-            res = await bridge.send_cmd(email, export["cmd"], exp_params)
+            res = {}
+            try:
+                res = await bridge.send_cmd(email, export["cmd"], exp_params)
+            except Exception as e:
+                logger.warning("%s export 失败: %s", skill, e)
             logger.info("%s export: %s", skill, str(res)[:200])
-            # 校验导出是否成功：手机端返回 {ok:true,...} 才视为登录态已保存；
-            # 导出失败不能假装登录成功（否则 agent 重试业务仍未登录，用户只看到「需要登录」却不知导出失败）
+            # 导出失败 → 可能是没真登录，回循环重试（不假装成功）
             if not (isinstance(res, dict) and res.get("ok")):
                 err = str(res.get("error") or "") if isinstance(res, dict) else ""
                 await ask(f"登录态保存失败（{err or '手机未返回成功'}），请确认已登录后重试一次。")
-                return False
-        except Exception as e:
-            logger.warning("%s export 失败: %s", skill, e)
-            await ask("登录态保存失败，请稍后重试。")
-            return False
+                continue
+
+        # 可选：verify 真登录校验（skill 在 login.json 声明校验方法，防假登录）
+        if verify_method:
+            if not await _verify_login(skill, verify_method, email, owner_id=owner_id):
+                await ask("还没检测到登录成功，请确认已在浏览器完成登录后重试（或回复「没登上」）。")
+                continue
+
+        logger.info("登录成功 skill=%s（登录态已存手机凭据库）", skill)
+        return True
+
+    await ask(f"登录未完成（已尝试 {max_tries} 次），请稍后重试或检查网络。")
+    return False
+
+
+async def _verify_login(skill: str, method: str, email: str, owner_id: str = "") -> bool:
+    """调 skill 声明的「校验是否已登录」方法，确认真登录（防假登录）。
+
+    判定规则：返回 need_login / 未登录类错误 → 未登录；否则视为已登录
+    （能调通需要登录态的接口且未报未登录，即 cookie/token 有效）。
+    """
+    from ..adapters.registry import run as skill_run
+    try:
+        res = await skill_run(skill, method, {}, email=email, owner_id=owner_id)
+    except Exception as e:
+        logger.warning("登录校验异常 skill=%s method=%s: %s", skill, method, e)
+        return False
+    if not isinstance(res, dict):
+        return False
+    if res.get("need_login"):
+        return False
+    err = str(res.get("error") or "")
+    if res.get("ok") is False and any(k in err for k in ("未登录", "登录", "401", "token")):
+        return False
     return True

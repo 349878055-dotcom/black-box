@@ -1,23 +1,75 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 虾米 App 启动图标：蓝底圆角 + 白色「X」（Xiami） -->
+<!-- 虾米 App 图标：渐变圆角背景 + 白色虾米图形 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- 圆角蓝色背景 -->
+    <!-- 渐变圆角背景 -->
     <path
-        android:fillColor="#4A90D9"
-        android:pathData="M20,0 H88 A20,20 0 0 1 108,20 V88 A20,20 0 0 1 88,108 H20 A20,20 0 0 1 0,88 V20 A20,20 0 0 1 20,0 Z" />
+        android:pathData="M20,0 H88 A20,20 0 0 1 108,20 V88 A20,20 0 0 1 88,108 H20 A20,20 0 0 1 0,88 V20 A20,20 0 0 1 20,0 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="8" android:startY="0"
+                android:endX="100" android:endY="108"
+                android:startColor="#7B9AFF"
+                android:centerColor="#6B8CFF"
+                android:endColor="#4F6EF5" />
+        </aapt:attr>
+    </path>
 
-    <!-- 白色 X（左上→右下） -->
+    <!-- 柔光底层 -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M36,28 L44,28 L66,80 L58,80 Z" />
+        android:fillAlpha="0.12"
+        android:pathData="M20,0 H88 A20,20 0 0 1 108,20 V54 C88,42 62,38 54,54 C46,70 28,76 14,68 C8,64 4,58 0,50 V20 A20,20 0 0 1 20,0 Z" />
 
-    <!-- 白色 X（右上→左下） -->
+    <!-- 虾身弧线（粗弧） -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M64,28 L72,28 L50,80 L42,80 Z" />
+        android:pathData="M62,26 C72,26 80,34 80,44 C80,52 76,58 70,62 L64,56 C68,53 72,48 72,44 C72,38 68,34 62,34 C56,34 50,40 48,48 C46,56 42,64 34,68 L30,62 C36,59 40,53 42,46 C44,36 52,26 62,26 Z" />
+
+    <!-- 虾头圆点 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M62,30 A6,6 0 1 1 62,42 A6,6 0 1 1 62,30 Z" />
+
+    <!-- 虾须1 -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2.5"
+        android:fillColor="#00000000"
+        android:pathData="M68,32 Q78,24 84,26" />
+
+    <!-- 虾须2 -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2.5"
+        android:fillColor="#00000000"
+        android:pathData="M70,36 Q80,32 86,34" />
+
+    <!-- 虾尾 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M30,62 C26,66 22,72 24,78 C26,74 30,70 34,68 Z" />
+
+    <!-- 虾腿短线 -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2"
+        android:fillColor="#00000000"
+        android:pathData="M56,46 L52,54" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2"
+        android:fillColor="#00000000"
+        android:pathData="M50,50 L46,58" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2"
+        android:fillColor="#00000000"
+        android:pathData="M44,54 L40,62" />
 </vector>

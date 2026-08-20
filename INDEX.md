@@ -11,11 +11,13 @@
 | 引擎认哪些字段 | [plans/contract-v2-内部实现.md](plans/contract-v2-内部实现.md) |
 | 手机蓝图能干什么 | [app/src/core/README.txt](app/src/core/README.txt) |
 | 云端三块怎么拆 | [cloud/cloud_orchestrator/README.md](cloud/cloud_orchestrator/README.md) |
-| 对话怎么点菜 | [cloud/cloud_orchestrator/core/](cloud/cloud_orchestrator/core/) |
+| 对话怎么点菜 | [plans/LangGraph原生架构改造说明.md](plans/LangGraph原生架构改造说明.md) |
+| LangGraph 图结构 | [cloud/cloud_orchestrator/core/graph_native.py](cloud/cloud_orchestrator/core/graph_native.py) |
 | 登录短信 / 浏览器 | [login_flow.py](cloud/cloud_orchestrator/core/login_flow.py) |
 | 注册、下发手机 | [registry.py](cloud/cloud_orchestrator/adapters/registry.py) |
 | 某家平台对接 | [skill_archive/jintao/skills/](cloud/cloud_orchestrator/store/archive_center/skill_archive/jintao/skills/) |
 | 审核记录 | [docs/体检/](docs/体检/) |
+| 同事 Windows 环境 / 给 AI 的交代 | [docs/同事接手指南-Windows.md](docs/同事接手指南-Windows.md) |
 | Zoo 铁令 | [.zoo-rules/ZOO_RULES.md](.zoo-rules/ZOO_RULES.md) |
 
 ## 顶层
@@ -43,15 +45,18 @@
 | [api/routes.py](cloud/cloud_orchestrator/api/routes.py) | HTTP：登录、对话、任务、/me、上台卡 |
 | [auth.py](cloud/cloud_orchestrator/auth.py) | JWT |
 | [config.py](cloud/cloud_orchestrator/config.py) | 读 `cloud/config.json` |
-| [core/master.py](cloud/cloud_orchestrator/core/master.py) | 后台任务、ask_user 等待、会话进度 |
+| [core/master.py](cloud/cloud_orchestrator/core/master.py) | 后台任务、interrupt/resume、会话进度 |
 | [core/agent.py](cloud/cloud_orchestrator/core/agent.py) | 人设闸门、skill_run、补参、确认、付款 |
-| [core/graph_engine.py](cloud/cloud_orchestrator/core/graph_engine.py) | LangGraph：挂哪些工具 |
+| [core/graph_native.py](cloud/cloud_orchestrator/core/graph_native.py) | LangGraph StateGraph + interrupt |
+| [core/graph_engine.py](cloud/cloud_orchestrator/core/graph_engine.py) | 薄入口（run_agent_graph） |
+| [core/graph_tools.py](cloud/cloud_orchestrator/core/graph_tools.py) | 工具 schema（phase gating） |
+| [core/dialogue/](cloud/cloud_orchestrator/core/dialogue/) | resolve_reply / route / skill_lock 纯函数 |
 | [core/login_flow.py](cloud/cloud_orchestrator/core/login_flow.py) | `sms_verify` / `browser` |
 | [core/form_state.py](cloud/cloud_orchestrator/core/form_state.py) | 契约 `form` 会话状态 |
 | [adapters/registry.py](cloud/cloud_orchestrator/adapters/registry.py) | 扫描 skill、强制 phone_only、注入手机通道 |
 | [retrieval/](cloud/cloud_orchestrator/retrieval/) | BGE 向量：`search(scope=skill)` |
 | [channel/](cloud/cloud_orchestrator/channel/) | 手机 WS：蓝图 / ask_user / 浏览器原语 |
-| [store/archive_center/consumer_archive/](cloud/cloud_orchestrator/store/archive_center/consumer_archive/) | 账号、会话（messages / steps / forms） |
+| [store/archive_center/consumer_archive/](cloud/cloud_orchestrator/store/archive_center/consumer_archive/) | 账号、会话（聊天 messages；办事状态在 checkpoint） |
 | [store/archive_center/skill_archive/](cloud/cloud_orchestrator/store/archive_center/skill_archive/) | 上台卡 + 各人 skill 包 |
 
 ## Skill 包（每人一份）

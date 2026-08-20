@@ -88,6 +88,15 @@ function getBase() {
   return S.base || localStorage.getItem('xiami_base') || 'http://140.143.144.28';
 }
 
+function handleBack() {
+  if (S.view === 'showcase') {
+    try {
+      const f = $('showcaseFrame');
+      if (f && f.contentWindow) { f.contentWindow.postMessage({ type:'showcase:back' }, '*'); return; }
+    } catch (e) {}
+  }
+  showView('chat');
+}
 // ═══ 视图切换 ═══
 const TITLES = { list:'对话列表', chat:'虾米', me:'我的', settings:'设置', showcase:'才艺' };
 const VIEWS = { list:'listView', chat:'chatView', me:'meView', settings:'settingsView', showcase:'showcaseView' };
@@ -182,8 +191,9 @@ async function startPersonChatFromShowcase(payload) {
 
 window.addEventListener('message', (e) => {
   const d = e && e.data;
-  if (!d || d.type !== 'showcase:hire') return;
-  startPersonChatFromShowcase(d);
+  if (!d) return;
+  if (d.type === 'showcase:hire') { startPersonChatFromShowcase(d); return; }
+  if (d.type === 'showcase:exit') { showView('chat'); return; }
 });
 function renderSettings() {
   const logout = $('setLogout');
@@ -293,6 +303,7 @@ const WALLS = {
 };
 
 const FONTS = {
+  premium: { css: '"DM Sans","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif', display: '"Noto Serif SC","Songti SC","STSong",serif', google: 'DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700|Noto+Serif+SC:wght@500;600;700' },
   system: { css: '-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif', display: null, google: '' },
   round: { css: '"Nunito","PingFang SC","Hiragino Sans GB",sans-serif', display: '"Nunito","PingFang SC",sans-serif', google: 'Nunito:wght@500;700;800' },
   soft: { css: '"Quicksand","PingFang SC","Hiragino Sans GB",sans-serif', display: '"Quicksand","PingFang SC",sans-serif', google: 'Quicksand:wght@500;700' },
@@ -307,19 +318,20 @@ function skinPack(o) { return o; }
 
 const THEMES = {
   classic: skinPack({
-    name:'虾米蓝', tag:'清爽圆角 · 日常助手', group:'light',
-    swatch:'linear-gradient(135deg,#dbeafe,#3d7eff)', btn:'soft', wall:'soft_l', wallSize:'',
-    font:'system', avatar:'24px', letter:'0',
+    name:'虾米蓝', tag:'柔光质感 · 日常助手', group:'light',
+    swatch:'linear-gradient(135deg,#dbeafe,#4f6ef5)', btn:'glow', wall:'wave_l', wallSize:'',
+    font:'premium', avatar:'20px', letter:'-.01em',
     icons:{ bot:'🦐', attach:'📷', me:'👤', settings:'⚙️', chat:'💬', skill:'✨', about:'ℹ️', out:'↩', new:'＋' },
     vars:{
-      '--bg':'#f6f7fb','--bg2':'#fff','--text':'#1f2937','--text2':'#111827','--muted':'#9ca3af','--muted2':'#6b7280',
-      '--line':'#f0f1f5','--line2':'#e5e8f0','--line3':'#f3f4f8','--accent':'#3d7eff','--accent2':'#5aa2ff',
-      '--accent-soft':'#e8f2ff','--accent-grad':'linear-gradient(135deg,#5aa2ff,#3d7eff)',
-      '--accent-shadow':'rgba(61,126,255,.28)','--accent-ring':'rgba(61,126,255,.14)',
-      '--input-bg':'#f7f8fb','--hover':'#f7f8fb','--me-hero':'linear-gradient(180deg,#e7f0ff,#f6f9ff)',
-      '--code-bg':'#eef1f9','--code-fg':'#c0272d','--pre-bg':'#f6f8fb','--sys-bg':'#fef3c7','--sys-fg':'#92400e',
-      '--btn-disabled':'#a9cdff','--search-bg':'#f4f6fa','--box-shadow':'0 1px 2px rgba(16,24,40,.04),0 4px 12px rgba(16,24,40,.05)',
-      '--modal-mask':'rgba(15,23,42,.45)'
+      '--bg':'#f4f6fc','--bg2':'#ffffff','--text':'#1a2236','--text2':'#0f172a','--muted':'#8b95a8','--muted2':'#5c667a',
+      '--line':'rgba(15,23,42,.06)','--line2':'rgba(15,23,42,.1)','--line3':'rgba(15,23,42,.04)',
+      '--accent':'#4f6ef5','--accent2':'#6b8cff',
+      '--accent-soft':'rgba(79,110,245,.1)','--accent-grad':'linear-gradient(135deg,#6b8cff 0%,#4f6ef5 52%,#3d5fd9 100%)',
+      '--accent-shadow':'rgba(79,110,245,.32)','--accent-ring':'rgba(79,110,245,.16)',
+      '--input-bg':'rgba(255,255,255,.72)','--hover':'rgba(79,110,245,.06)','--me-hero':'linear-gradient(165deg,rgba(107,140,255,.14) 0%,rgba(244,246,252,.95) 58%)',
+      '--code-bg':'rgba(79,110,245,.08)','--code-fg':'#3d5fd9','--pre-bg':'rgba(15,23,42,.03)','--sys-bg':'rgba(251,191,36,.14)','--sys-fg':'#92400e',
+      '--btn-disabled':'#b8c9ff','--search-bg':'rgba(15,23,42,.04)','--box-shadow':'0 1px 2px rgba(15,23,42,.04),0 8px 24px rgba(15,23,42,.06)',
+      '--modal-mask':'rgba(15,23,42,.48)'
     }
   }),
   mint: skinPack({
@@ -512,7 +524,7 @@ function welcomeHtml() {
     const nm = esc(sess.persona.person_name || sess.name || '帮手');
     return '<div class="chat-welcome"><div class="welcome-avatar" id="welcomeBot">' + bot + '</div><h2>跟 <b>' + nm + '</b> 办事</h2><div class="welcome-sub">直接说要办的事；TA 按经验书问清楚再动手</div></div>';
   }
-  return '<div class="chat-welcome"><div class="welcome-avatar" id="welcomeBot">' + bot + '</div><h2>家里有人</h2><div class="welcome-sub" onclick="showView(\'showcase\')"><span class="welcome-spark">✨</span>去才艺，看家里谁会</div></div>';
+  return '<div class="chat-welcome"><div class="welcome-avatar" id="welcomeBot">' + bot + '</div><h2>随时候命</h2><div class="welcome-sub" onclick="showView(\'showcase\')"><span class="welcome-spark">✨</span>逛逛才艺大厅</div></div>';
 }
 
 function loadThemeFont(fontKey) {
@@ -1265,8 +1277,9 @@ function appendMsg(who, text, img) {
   // 去重：若列表中已存在完全相同的 bot 消息且时间很近（<3分钟），也跳过
   if (who === 'bot' && !img && sess.messages.some(m => m.who === 'bot' && m.text === text && (Date.now() - (m.at || 0)) < 180000)) return;
   sess.messages.push({ who, text, img: img || null, at: Date.now() });
-  // 会话自动命名（豆包式）：第一条用户消息作为标题，避免一列全是「新对话」
-  if (who === 'user' && !sess._titled) {
+  // 会话自动命名（豆包式）：仅非 persona 会话才用第一条用户消息作标题；
+  // persona（才艺）会话保留人设名，避免「金涛」被消息内容覆盖（问题4）。
+  if (who === 'user' && !sess._titled && !sess.persona) {
     const t = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
     if (t) sess.name = t.slice(0, 12);
     sess._titled = true;
@@ -1278,7 +1291,29 @@ function appendMsg(who, text, img) {
 }
 function scrollChat() { const c=$('chatScroll'); if (c) c.scrollTop = c.scrollHeight; }
 
+// 聊天附件回传（Bug2 修复 + AI 读图）：原生 sendFileToUi 调 window.__fileChosen(name, b64, mime)。
+// 先把图片暂存（S.pendingImage）并显示，用户点发送时随消息上传云端，由千问视觉识别成文字。
+window.__fileChosen = function(name, b64, mime) {
+  try {
+    if (!b64) return;
+    S.pendingImage = b64;
+    S.pendingImageName = String(name || '附件');
+    appendMsg('user', '📎 ' + S.pendingImageName + '\n（点发送，AI 会识别图片内容）', b64);
+  } catch (e) {}
+};
 
+
+function togglePlusMenu() {
+  const m = $('plusMenu');
+  m.style.display = m.style.display === 'none' ? 'flex' : 'none';
+}
+function plusAction(type) {
+  $('plusMenu').style.display = 'none';
+  try {
+    if (type === 'file' && window.AndroidBridge && window.AndroidBridge.chooseFile) window.AndroidBridge.chooseFile();
+    if (type === 'photo' && window.AndroidBridge && window.AndroidBridge.takePhoto) window.AndroidBridge.takePhoto();
+  } catch (e) {}
+}
 function syncSendBtn() {
   const btn = $('sendBtn');
   const msg = $('msg');
@@ -1286,20 +1321,40 @@ function syncSendBtn() {
   btn.disabled = !(msg.value || '').trim();
 }
 
+// 语音转文字（手机端系统识别）：原生识别后回填输入框并发送
+window.__speechResult = function(text, err) {
+  try {
+    if (text && String(text).trim()) {
+      const el = $('msg');
+      if (el) { el.value = String(text).trim(); syncSendBtn(); }
+      sendMsg();
+    } else if (err) {
+      appendMsg('bot', '⚠️ ' + err);
+    }
+  } catch (e) {}
+};
+function speechInput() {
+  try { if (window.AndroidBridge && window.AndroidBridge.speechToText) window.AndroidBridge.speechToText(); } catch (e) {}
+}
+
 async function sendMsg() {
-  const msg = $('msg').value.trim(); if (!msg) return;
+  try { $('plusMenu').style.display = 'none'; } catch(e){}
+  const msg = $('msg').value.trim();
+  const img = S.pendingImage || '';
+  if (!msg && !img) return;
   if (!S.token) { appendMsg('bot', '⚠️ 请先登录'); return; }
-  appendMsg('user', msg);
+  S.pendingImage = ''; S.pendingImageName = '';
+  // 图片已在 __fileChosen 里显示过（带图消息）；这里只补充文字（如有）
+  if (msg) appendMsg('user', msg);
   $('msg').value = '';
   syncSendBtn();
-  // skill ask_user 等待中：把回复当「回答」送出去（WS 在线走 WS；WS 断线走 HTTP 带 ask_id）
-  if (S.waitingAsk) {
+  // skill ask_user 等待中：文字回复当「回答」送出去；带图不当作 ask 回答（走普通 chat 上传识别）
+  if (S.waitingAsk && !img) {
     const askId = S.askId || '';
     S.waitingAsk = false;
     if (S.ws && S.ws.readyState === 1) {
       try { S.ws.send(JSON.stringify({ type:'user_input', data:{ value: msg, ask_id: askId } })); } catch (e) {}
     } else {
-      // WS 断开：回答走 HTTP 带 ask_id，云端仍能喂给等待中的任务（问题①兜底）
       const sess = curSess();
       try {
         await api('/api/v1/chat', { method:'POST', body: JSON.stringify({
@@ -1313,6 +1368,7 @@ async function sendMsg() {
   if (!cur) { await newSess(); cur = curSess(); }   // 全部会话被删空时自动新建一个会话再发送
   const sess = await ensureConvSynced(cur);
   const payload = { message: msg, session_id: sess ? sess.id : 'default' };
+  if (img) payload.image = img;   // 带图 → 随消息上传云端，由千问视觉识别成文字
   try {
     const r = await api('/api/v1/chat', { method:'POST', body: JSON.stringify(payload) });
     if (r.reply) appendMsg('bot', r.reply);
@@ -1391,13 +1447,27 @@ function startTaskPoll() { if (!S.timer) S.timer = setInterval(refreshTask, 1500
 
 // ═══ 设备执行通道（WS + AndroidBridge）═══
 function wsUrl() { return S.base.replace(/^http/, 'ws') + '/api/v1/ws?email=' + encodeURIComponent(S.email) + '&token=' + encodeURIComponent(S.token); }
-let _wsHb = null, _wsRetry = 0;
+let _wsHb = null, _wsRetry = 0, _lastPongAt = 0;
+// 断线加固（2026-08-20）：缩短心跳 + 假死检测 + 快速重连，减小 NAT/nginx 掐连窗口。
+// 不涉及后台保活：客户不用时 App 进后台照常断开省电，客户可关。
+const WS_HEARTBEAT_MS = 12000;     // 心跳间隔 12s（原 25s）
+const WS_PONG_TIMEOUT_MS = 36000;  // 36s 没收到 pong → 判定连接假死，主动断开重连
+const WS_RETRY_BASE_MS = 1000;     // 重连首退避 1s（原 3s）
 function stopWsHeartbeat() { if (_wsHb) { clearInterval(_wsHb); _wsHb = null; } }
 function startWsHeartbeat(ws) {
   stopWsHeartbeat();
+  _lastPongAt = Date.now();
   _wsHb = setInterval(() => {
-    try { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type:'ping' })); } catch (e) {}
-  }, 25000);
+    try {
+      if (ws && ws.readyState === 1) {
+        ws.send(JSON.stringify({ type:'ping' }));
+        // 假死检测：连接被 NAT/nginx 掐了但 TCP 层没感知（收不到 pong）→ 主动断开触发重连
+        if (Date.now() - _lastPongAt > WS_PONG_TIMEOUT_MS) {
+          try { ws.close(); } catch (e) {}
+        }
+      }
+    } catch (e) {}
+  }, WS_HEARTBEAT_MS);
 }
 function connectWS() {
   if (!S.token || !S.email) return;
@@ -1415,8 +1485,9 @@ function connectWS() {
     ws.onclose = (ev) => {
       stopWsHeartbeat();
       S.ws = null;
+      _lastPongAt = 0;
       _wsRetry = Math.min(_wsRetry + 1, 6);
-      const delay = Math.min(3000 * Math.pow(2, _wsRetry - 1), 30000);
+      const delay = Math.min(WS_RETRY_BASE_MS * Math.pow(2, _wsRetry - 1), 15000);
       setConn('⚠️ 设备断开，' + Math.round(delay / 1000) + '秒后重连…');
       if (_wsRetry >= 3) {
         appendMsg('sys', '⚠️ 与云端的实时连接已断开，正在重连…消息可能延迟送达。');
@@ -1424,7 +1495,13 @@ function connectWS() {
       setTimeout(connectWS, delay);
     };
     ws.onerror = () => {};
-    ws.onmessage = ev => { try { handleCmd(JSON.parse(ev.data)); } catch (e) {} };
+    ws.onmessage = ev => {
+      try {
+        const m = JSON.parse(ev.data);
+        if (m && m.cmd === 'pong') _lastPongAt = Date.now();  // 心跳应答计时
+        handleCmd(m);
+      } catch (e) {}
+    };
   } catch (e) { setConn('❌ WS 失败'); }
 }
 function sendResult(data) { if (S.ws && S.ws.readyState === 1) S.ws.send(JSON.stringify({ type:'result', data })); }
@@ -1526,10 +1603,14 @@ async function handleCmd(msg) {
     sendResult(res);
     return;
   }
-  // 导出登录态（glyy Bearer token）→ 原生读浏览器 localStorage/cookie 存手机凭据库
-  if (cmd === 'export_token') {
+  // 浏览器登录原语：clear_cookies / export_token / export_cookies / check_ready
+  // → 全部透传原生 executeCmd（原生已实现这些分支）。
+  //   缺一就会落进下方 unknown cmd 返回失败：例如途牛(browser 登录)依赖
+  //   export_cookies 导出 cookie、clear_cookies 清残留，漏透传导致登录态永远保存不了。
+  if (cmd === 'clear_cookies' || cmd === 'export_token' || cmd === 'export_cookies' || cmd === 'check_ready') {
     let res = { ok: false, error: 'no bridge' };
-    try { res = await execCmd('export_token', params); } catch (e) { res = { ok: false, error: String(e) }; }
+    try { res = await execCmd(cmd, params); } catch (e) { res = { ok: false, error: String(e) }; }
+    showBrowserBtn();
     sendResult(res);
     return;
   }
@@ -1570,6 +1651,8 @@ const PROFILE_CARDS = [
       ['province','省份','text'],
       ['idnum','身份证号','text'],
       ['idnum_photo','身份证照片','photo'],
+      ['passport_no','护照号','text'],
+      ['passport_no_photo','护照照片','photo'],
       ['phone','手机号','text'],
       ['email','邮箱','text'],
       ['occupation','职业','text'],
@@ -1651,26 +1734,38 @@ function getProfile() {
     return { cards, main: (cards[0] || {}) };
   } catch (e) { return { cards: [], main: {} }; }
 }
-function profileBoxHtml() {
+let _activeProfileTab = 'zh';
+function switchProfileTab(tabId) {
+  _activeProfileTab = tabId;
+  const box = document.getElementById('profileTabContent');
+  if (box) box.innerHTML = profileCardFieldsHtml(tabId);
+  document.querySelectorAll('.pf-tab').forEach(el => el.classList.toggle('active', el.dataset.tab === tabId));
+}
+function profileCardFieldsHtml(tabId) {
   const cards = getProfile().cards;
-  const cardBox = (card) => {
-    const main = cards.find(c=>c.id===card.id) || {};
-    const rows = card.fields.map(([k,label,type]) => {
-      if (type === 'photo') {
-        const v = (window._cardPhotos && window._cardPhotos[card.id+'_'+k]) || main[k] || '';
-        const fn = v.split('/').pop();
-        return `<div class="field-row"><label>${label}</label>
-          <button class="btn small" style="width:auto" onclick="pickCardPhoto('${card.id}','${k}')">📷 ${v ? '已选' : '选择'}</button>
-          ${v ? `<span class="muted" style="font-size:12px;margin-left:6px">${esc(fn)}</span>` : ''}</div>`;
-      }
-      return `<div class="field-row"><label>${label}</label><input id="pf_${card.id}_${k}" type="${type}" value="${esc(main[k]||'')}"></div>`;
-    }).join('');
-    return `<div class="box"><h4>${card.label}卡</h4>${rows}</div>`;
-  };
+  const card = PROFILE_CARDS.find(c => c.id === tabId);
+  if (!card) return '';
+  const main = cards.find(c => c.id === card.id) || {};
+  return card.fields.map(([k,label,type]) => {
+    if (type === 'photo') {
+      const v = (window._cardPhotos && window._cardPhotos[card.id+'_'+k]) || main[k] || '';
+      const fn = v.split('/').pop();
+      return `<div class="field-row"><label>${label}</label>
+        <button class="btn small" style="width:auto" onclick="pickCardPhoto('${card.id}','${k}')">📷 ${v ? '已选' : '选择'}</button>
+        ${v ? `<span class="muted" style="font-size:12px;margin-left:6px">${esc(fn)}</span>` : ''}</div>`;
+    }
+    return `<div class="field-row"><label>${label}</label><input id="pf_${card.id}_${k}" type="${type}" value="${esc(main[k]||'')}"></div>`;
+  }).join('');
+}
+function profileBoxHtml() {
+  const tabs = PROFILE_CARDS.map(c =>
+    `<button class="pf-tab${c.id === _activeProfileTab ? ' active' : ''}" data-tab="${c.id}" onclick="switchProfileTab('${c.id}')">${c.label}</button>`
+  ).join('');
   return `<div class="box">
-    <h3>🗂 个人资料中心 <span class="muted" style="font-weight:400">（乘车人/就诊人信息，订票/挂号自动带入；中文、英文各填一张卡）</span></h3>
-    ${PROFILE_CARDS.map(cardBox).join('')}
-    <button class="btn small" onclick="saveProfile()">💾 保存到个人资料中心</button>
+    <h3>🗂 个人资料中心</h3>
+    <div class="pf-tabs">${tabs}</div>
+    <div id="profileTabContent">${profileCardFieldsHtml(_activeProfileTab)}</div>
+    <button class="btn small" onclick="saveProfile()" style="margin-top:10px">💾 保存</button>
     <div class="muted" style="margin-top:6px">仅存于本机（不上传云端）；执行订票/挂号/登录等才艺时自动带入，换手机需重新填写。</div>
   </div>`;
 }
@@ -1726,7 +1821,7 @@ async function loadMe() {
       ${profileBoxHtml()}
       ${authBoxHtml()}
       <div class="box"><h3>我的才艺（${mine.length}）</h3>
-        <div class="muted" style="margin:2px 0 8px">家人在这里管理上场。大厅在顶栏 ✨</div>
+        <div class="muted" style="margin:2px 0 8px">在这里管理上场。大厅在顶栏 ✨</div>
         ${mine.length ? mine.map(s=>`<div style="padding:5px 0">${esc(s.name)} ${skillBadge(s)}</div>`).join('') : '<div class="muted">还没有挂上才艺</div>'}
       </div>`;
     loadAuth();
@@ -1850,7 +1945,6 @@ document.addEventListener('DOMContentLoaded', function init() {
           notifyActiveAccount(em2);
         }
         setConn('设备在线');
-        showBrowserBtn();
         connectWS();
         loadMe(); syncConversations();
         showView('chat');   // 已登录 → 进入会话列表首页
@@ -1870,7 +1964,6 @@ document.addEventListener('DOMContentLoaded', function init() {
           // 网络/暂时性错误 → 保留 token，进入离线态；最多重试 5 次（每 5s），网络恢复自动登录
           if (n < 5) setTimeout(() => tryValidate(n + 1), 5000);
           setConn('⚠️ 离线（登录态已保留，自动重试中）');
-          showBrowserBtn();
           showView('chat');
         }
       });
@@ -1894,76 +1987,102 @@ document.addEventListener('DOMContentLoaded', function init() {
 
 
   :root {
-    --bg: #f6f7fb;
-    --bg2: #fff;
-    --text: #1f2937;
-    --text2: #111827;
-    --muted: #9ca3af;
-    --muted2: #6b7280;
-    --line: #f0f1f5;
-    --line2: #e5e8f0;
-    --line3: #f3f4f8;
-    --accent: #3d7eff;
-    --accent2: #5aa2ff;
-    --accent-soft: #e8f2ff;
-    --accent-grad: linear-gradient(135deg, #5aa2ff, #3d7eff);
-    --accent-shadow: rgba(61,126,255,.28);
-    --accent-ring: rgba(61,126,255,.14);
-    --input-bg: #f7f8fb;
-    --hover: #f7f8fb;
+    --bg: #f4f6fc;
+    --bg2: #ffffff;
+    --text: #1a2236;
+    --text2: #0f172a;
+    --muted: #8b95a8;
+    --muted2: #5c667a;
+    --line: rgba(15,23,42,.06);
+    --line2: rgba(15,23,42,.1);
+    --line3: rgba(15,23,42,.04);
+    --accent: #4f6ef5;
+    --accent2: #6b8cff;
+    --accent-soft: rgba(79,110,245,.1);
+    --accent-grad: linear-gradient(135deg, #6b8cff 0%, #4f6ef5 52%, #3d5fd9 100%);
+    --accent-shadow: rgba(79,110,245,.32);
+    --accent-ring: rgba(79,110,245,.16);
+    --input-bg: rgba(255,255,255,.72);
+    --hover: rgba(79,110,245,.06);
     --danger: #ef4444;
-    --sys-bg: #fef3c7;
+    --sys-bg: rgba(251,191,36,.14);
     --sys-fg: #92400e;
-    --code-bg: #eef1f9;
-    --code-fg: #c0272d;
-    --pre-bg: #f6f8fb;
-    --me-hero: linear-gradient(180deg, #e7f0ff, #f6f9ff);
-    --modal-mask: rgba(15,23,42,.45);
-    --box-shadow: 0 1px 2px rgba(16,24,40,.04), 0 4px 12px rgba(16,24,40,.05);
+    --code-bg: rgba(79,110,245,.08);
+    --code-fg: #3d5fd9;
+    --pre-bg: rgba(15,23,42,.03);
+    --me-hero: linear-gradient(165deg, rgba(107,140,255,.14) 0%, rgba(244,246,252,.95) 58%);
+    --modal-mask: rgba(15,23,42,.48);
+    --box-shadow: 0 1px 2px rgba(15,23,42,.04), 0 8px 24px rgba(15,23,42,.06);
     --chat-wallpaper: var(--bg);
-    --btn-disabled: #a9cdff;
-    --search-bg: #f4f6fa;
+    --btn-disabled: #b8c9ff;
+    --search-bg: rgba(15,23,42,.04);
+    --glass: rgba(255,255,255,.78);
+    --glass-border: rgba(255,255,255,.55);
+    --surface-elevated: rgba(255,255,255,.92);
     /* 按钮风格变量（每套壳子不同） */
-    --btn-radius: 11px;
-    --btn-radius-pill: 22px;
+    --btn-radius: 14px;
+    --btn-radius-pill: 24px;
     --btn-radius-sm: 18px;
     --btn-bg: var(--accent-grad);
     --btn-fg: #fff;
     --btn-border: none;
-    --btn-shadow: 0 4px 12px var(--accent-shadow);
+    --btn-shadow: 0 8px 22px var(--accent-shadow), 0 0 0 1px rgba(255,255,255,.12) inset;
     --btn-weight: 600;
     --btn-tracking: 0;
     --btn-transform: none;
     --ghost-bg: var(--bg2);
     --ghost-fg: var(--accent);
-    --ghost-border: 1px solid var(--accent);
-    --ghost-shadow: none;
+    --ghost-border: 1px solid var(--line2);
+    --ghost-shadow: 0 4px 14px rgba(0,0,0,.04);
     --attach-radius: 50%;
     --attach-bg: var(--accent-soft);
     --attach-fg: var(--accent);
     --attach-border: none;
     --attach-shadow: none;
-    --input-radius: 22px;
-    --font: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-    --font-display: var(--font);
-    --avatar-radius: 24px;
-    --letter: 0;
+    --input-radius: 24px;
+    --font: "DM Sans", -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    --font-display: "Noto Serif SC", "Songti SC", "STSong", serif;
+    --avatar-radius: 20px;
+    --letter: -.01em;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; outline: none; }
   html, body { height: 100%; }
   body {
     font-family: var(--font);
     letter-spacing: var(--letter);
-    background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased;
+    background: var(--bg);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
     transition: background .25s, color .25s;
   }
+  body[data-tone="dark"] {
+    --glass: rgba(30,41,59,.72);
+    --glass-border: rgba(255,255,255,.08);
+    --surface-elevated: rgba(30,41,59,.88);
+  }
+
+  /* ── 矢量图标（顶栏 / 输入栏）── */
+  .ico { width: 20px; height: 20px; display: block; flex-shrink: 0; stroke: currentColor; fill: none; stroke-width: 1.85; stroke-linecap: round; stroke-linejoin: round; }
+  .ico-fill { fill: currentColor; stroke: none; }
+  .ico.sm { width: 18px; height: 18px; }
+  .ico.lg { width: 22px; height: 22px; }
 
   /* ── 整体：左侧栏（滑出）+ 右侧主区 ── */
-  .shell { display: flex; height: 100vh; }
+  .shell { display: flex; height: 100vh; background: radial-gradient(120% 80% at 50% -20%, var(--accent-soft), transparent 55%), var(--bg); }
   .main { flex: 1; min-width: 0; }
 
   /* ── 对话列表通用项（左侧栏抽屉已废弃，改为全屏对话列表页）── */
-  .menu-btn { background: none; border: none; font-size: 20px; cursor: pointer; padding: 4px 8px 4px 0; color: var(--muted2); }
+  .menu-btn {
+    background: rgba(255,255,255,.45); border: 1px solid var(--line2);
+    width: 36px; height: 36px; border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; padding: 0; color: var(--muted2);
+    transition: background .15s, color .15s, border-color .15s, transform .1s;
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  }
+  body[data-tone="dark"] .menu-btn { background: rgba(255,255,255,.06); }
+  .menu-btn:active { background: var(--accent-soft); color: var(--accent); border-color: transparent; transform: scale(.96); }
   .conv-head { padding: 10px 6px 6px; font-size: 12px; color: var(--muted); letter-spacing: .5px; }
   .conv-item { display: flex; flex-direction: column; padding: 10px 11px; border-radius: 10px; cursor: pointer; position: relative; z-index: 2; background: var(--bg2); transition: transform .18s ease, background .15s; touch-action: pan-y; }
   .conv-item.active { background: var(--accent-soft); }
@@ -1972,10 +2091,16 @@ document.addEventListener('DOMContentLoaded', function init() {
 
   /* ── 右侧主区 ── */
   .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-  .topbar { display: flex; align-items: center; gap: 8px; padding: 10px 16px; background: var(--bg2); border-bottom: 1px solid var(--line); }
+  .topbar {
+    display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+    background: var(--glass); border-bottom: 1px solid var(--glass-border);
+    backdrop-filter: blur(18px) saturate(1.15); -webkit-backdrop-filter: blur(18px) saturate(1.15);
+    box-shadow: 0 1px 0 rgba(255,255,255,.35);
+  }
+  body[data-tone="dark"] .topbar { box-shadow: none; }
   .db-title { flex: 1; min-width: 0; text-align: center; }
-  .db-title .title { font-size: 16px; font-weight: 700; color: var(--text2); line-height: 1.2; flex: none; }
-  .db-sub { font-size: 10px; color: var(--muted); margin-top: 1px; }
+  .db-title .title { font-size: 17px; font-weight: 700; color: var(--text2); line-height: 1.2; flex: none; letter-spacing: .02em; }
+  .db-sub { font-size: 10px; color: var(--muted); margin-top: 2px; letter-spacing: .04em; }
   .topbar .title { font-size: 15px; font-weight: 600; flex: 1; color: var(--text2); }
   .topbar .conn {
     width: 28px; height: 28px; flex-shrink: 0;
@@ -2024,58 +2149,94 @@ document.addEventListener('DOMContentLoaded', function init() {
     text-transform: var(--btn-transform); cursor: pointer; box-shadow: var(--btn-shadow);
   }
   .lv-search { padding: 6px 14px 4px; }
-  .lv-search input { background: var(--search-bg); color: var(--text); border: none; border-radius: 18px; padding: 10px 14px; font-size: 14px; margin-top: 0; }
+  .lv-search input {
+    background: var(--search-bg); color: var(--text); border: 1px solid var(--line2);
+    border-radius: 16px; padding: 11px 14px; font-size: 14px; margin-top: 0;
+    box-shadow: inset 0 1px 2px rgba(15,23,42,.03);
+  }
+  .lv-search input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
   .lv-list { flex: 1; overflow-y: auto; padding: 4px 14px 10px; }
   .lv-list .conv-head { padding: 12px 2px 8px; font-size: 12px; color: var(--muted); }
-  .lv-list .conv-item { display: flex; flex-direction: row; align-items: center; gap: 12px; padding: 13px 4px; border-radius: 10px; border-bottom: 1px solid var(--line3); background: none; }
-  .lv-list .conv-item.active { background: var(--accent-soft); border-radius: 10px; }
-  .lv-list .conv-avatar { width: 40px; height: 40px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-size: 18px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .lv-list .conv-item { display: flex; flex-direction: row; align-items: center; gap: 12px; padding: 13px 6px; border-radius: 14px; border-bottom: none; background: none; margin-bottom: 2px; }
+  .lv-list .conv-item:active { background: var(--hover); }
+  .lv-list .conv-item.active { background: var(--accent-soft); border-radius: 14px; }
+  .lv-list .conv-avatar {
+    width: 42px; height: 42px; border-radius: var(--avatar-radius);
+    background: linear-gradient(145deg, var(--accent-soft), rgba(255,255,255,.5));
+    color: var(--accent); font-size: 18px;
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.45), 0 4px 12px var(--accent-ring);
+  }
   .lv-list .conv-item .cn { flex: 1; font-size: 15px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .lv-list .conv-time { font-size: 12px; color: var(--muted); flex-shrink: 0; }
   /* 空态（豆包式：居中引导页，不再与「最近对话」标题重复） */
   .lv-list .conv-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 72px 24px; color: var(--muted); text-align: center; }
-  .lv-list .conv-empty .ce-ico { width: 72px; height: 72px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-size: 34px; display: flex; align-items: center; justify-content: center; margin-bottom: 16px; }
+  .lv-list .conv-empty .ce-ico {
+    width: 76px; height: 76px; border-radius: 24px;
+    background: linear-gradient(145deg, var(--accent-soft), rgba(255,255,255,.35));
+    color: var(--accent); font-size: 34px;
+    display: flex; align-items: center; justify-content: center; margin-bottom: 16px;
+    box-shadow: 0 12px 28px var(--accent-ring), inset 0 1px 0 rgba(255,255,255,.5);
+  }
   .lv-list .conv-empty .ce-title { font-size: 16px; font-weight: 700; color: var(--text2); margin-bottom: 6px; }
   .lv-list .conv-empty .ce-sub { font-size: 13px; color: var(--muted); margin-bottom: 22px; line-height: 1.6; }
   .lv-list .conv-empty .ce-btn { background: var(--btn-bg); color: var(--btn-fg); border: var(--btn-border); border-radius: var(--btn-radius-sm); padding: 10px 22px; font-size: 14px; font-weight: var(--btn-weight); cursor: pointer; box-shadow: var(--btn-shadow); }
   .lv-foot { padding: 10px 14px 22px; border-top: 1px solid var(--line); }
-  .lv-item { display: flex; align-items: center; gap: 10px; padding: 11px 4px; font-size: 15px; color: var(--muted2); cursor: pointer; }
-  .lv-item:active { color: var(--accent); }
+  .lv-item { display: flex; align-items: center; gap: 10px; padding: 12px 6px; font-size: 15px; color: var(--muted2); cursor: pointer; border-radius: 12px; }
+  .lv-item:active { color: var(--accent); background: var(--hover); }
+  .lv-item span[id^="ic"] { width: 28px; height: 28px; border-radius: 9px; background: var(--accent-soft); color: var(--accent); display: inline-flex; align-items: center; justify-content: center; font-size: 14px; }
 
   .view { flex: 1; display: none; flex-direction: column; min-height: 0; }
   .view.active { display: flex; }
 
-  /* ── 聊天（Kimi 风格：浅色底 + 柔和圆角气泡）── */
+  /* ── 聊天（质感卡片 + 柔和气泡）── */
   #chatView { background: var(--chat-wallpaper); background-attachment: fixed; }
-  .chat-scroll { flex: 1; overflow-y: auto; padding: 20px 16px; }
+  .chat-scroll { flex: 1; overflow-y: auto; padding: 20px 16px 12px; }
   .chat-inner { max-width: 700px; margin: 0 auto; }
-  .msg { font-size: 17px; line-height: 1.7; word-break: break-word; margin-bottom: 18px; }
-  .msg.user { background: var(--accent-grad); color: #fff; padding: 10px 14px; border-radius: 16px; border-bottom-right-radius: 6px; max-width: 80%; margin-left: auto; white-space: pre-wrap; box-shadow: 0 2px 8px var(--accent-shadow); }
+  .msg { font-size: 16px; line-height: 1.72; word-break: break-word; margin-bottom: 16px; }
+  .msg.user {
+    background: var(--accent-grad); color: #fff; padding: 11px 15px;
+    border-radius: 18px; border-bottom-right-radius: 6px; max-width: 82%; margin-left: auto;
+    white-space: pre-wrap;
+    box-shadow: 0 6px 18px var(--accent-shadow), inset 0 1px 0 rgba(255,255,255,.22);
+  }
   .msg.bot { background: transparent; color: var(--text); max-width: 100%; }
-  .msg.sys { background: var(--sys-bg); color: var(--sys-fg); font-size: 15px; text-align: center; max-width: 100%; border-radius: 12px; padding: 8px 12px; margin-bottom: 12px; }
-  .chat-welcome { text-align: center; color: var(--muted); padding: 22vh 28px 40px; }
+  .msg.bot .md {
+    background: var(--surface-elevated); border: 1px solid var(--line2);
+    border-radius: 18px; border-bottom-left-radius: 6px;
+    padding: 12px 15px; box-shadow: var(--box-shadow);
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  }
+  .msg.sys {
+    background: var(--sys-bg); color: var(--sys-fg); font-size: 13px; text-align: center;
+    max-width: 100%; border-radius: 999px; padding: 7px 14px; margin-bottom: 12px;
+    border: 1px solid rgba(146,64,14,.08);
+  }
+  .chat-welcome { text-align: center; color: var(--muted); padding: 20vh 28px 40px; }
   .db-title .title, .lv-title, .chat-welcome h2, .me-name, .modal h2, .box h3 {
     font-family: var(--font-display);
   }
   .chat-welcome .welcome-avatar {
-    width: 64px; height: 64px; margin: 0 auto 28px; border-radius: var(--avatar-radius);
-    background: var(--accent-grad); color: #fff; font-size: 32px;
+    width: 72px; height: 72px; margin: 0 auto 28px; border-radius: var(--avatar-radius);
+    background: var(--accent-grad); color: #fff; font-size: 34px;
     display: flex; align-items: center; justify-content: center;
-    box-shadow: 0 10px 24px var(--accent-shadow);
+    box-shadow: 0 16px 36px var(--accent-shadow), inset 0 1px 0 rgba(255,255,255,.28);
   }
   .chat-welcome h2 {
-    font-size: 26px; color: var(--text2); margin: 0; font-weight: 650;
-    letter-spacing: .18em; line-height: 1.35;
+    font-size: 28px; color: var(--text2); margin: 0; font-weight: 650;
+    letter-spacing: .12em; line-height: 1.35;
   }
   .chat-welcome h2 b { color: var(--accent); font-weight: 800; }
   .chat-welcome .welcome-sub {
     display: inline-flex; align-items: center; gap: 8px;
-    margin-top: 22px; padding: 8px 16px 8px 12px;
+    margin-top: 22px; padding: 9px 18px 9px 14px;
     border-radius: 999px; font-size: 14px; line-height: 1;
-    letter-spacing: .06em; color: var(--muted2);
-    background: var(--hover); border: 1px solid var(--line);
-    cursor: pointer;
+    letter-spacing: .04em; color: var(--muted2);
+    background: var(--surface-elevated); border: 1px solid var(--line2);
+    box-shadow: var(--box-shadow);
+    cursor: pointer; transition: transform .12s, border-color .15s;
   }
+  .chat-welcome .welcome-sub:active { transform: scale(.98); border-color: var(--accent); }
   .chat-welcome .welcome-spark { font-size: 15px; line-height: 1; transform: translateY(-0.5px); }
   /* ask_user 建议选项按钮条（点选代替打字） */
   .ask-options {
@@ -2083,43 +2244,57 @@ document.addEventListener('DOMContentLoaded', function init() {
     padding: 8px 14px 0; max-width: 700px; margin: 0 auto;
   }
   .ask-opt {
-    padding: 9px 15px; font-size: 14px; color: var(--accent);
-    background: var(--bg2); border: 1px solid var(--accent); border-radius: 18px;
-    cursor: pointer; transition: background .15s, color .15s;
+    padding: 9px 16px; font-size: 14px; color: var(--accent);
+    background: var(--surface-elevated); border: 1px solid var(--line2); border-radius: 999px;
+    cursor: pointer; transition: background .15s, color .15s, border-color .15s, transform .1s;
+    box-shadow: 0 2px 8px rgba(15,23,42,.04);
   }
-  .ask-opt:active { background: var(--accent); color: var(--bg2); }
+  .ask-opt:active { background: var(--accent); color: #fff; border-color: transparent; transform: scale(.98); }
+  .plus-menu {
+    display: flex; gap: 8px; padding: 10px 14px;
+    background: var(--glass); border-top: 1px solid var(--glass-border);
+    backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  }
+  .plus-menu button {
+    flex: 1; padding: 12px 0; border: 1px solid var(--line2); border-radius: 14px;
+    background: var(--surface-elevated); font-size: 14px; color: var(--text); cursor: pointer;
+    box-shadow: var(--box-shadow);
+  }
   .chat-inputbar {
-    padding: 10px 14px 14px;
-    background: var(--bg2);
-    border-top: 1px solid var(--line);
+    padding: 10px 14px calc(14px + env(safe-area-inset-bottom, 0px));
+    background: var(--glass); border-top: 1px solid var(--glass-border);
+    backdrop-filter: blur(18px) saturate(1.1); -webkit-backdrop-filter: blur(18px) saturate(1.1);
   }
   .chat-input-inner { max-width: 700px; margin: 0 auto; }
   /* 豆包式：加号 + 输入 + 发送 同框一体 */
   .chat-composer {
     display: flex;
     align-items: center;
-    gap: 2px;
-    min-height: 48px;
-    padding: 5px 5px 5px 4px;
+    gap: 4px;
+    min-height: 50px;
+    padding: 6px 6px 6px 4px;
     background: var(--input-bg);
     border: 1px solid var(--line2);
-    border-radius: 24px;
+    border-radius: 26px;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.55), 0 6px 20px rgba(15,23,42,.05);
     transition: border-color .15s, box-shadow .15s, background .15s;
   }
+  body[data-tone="dark"] .chat-composer { box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 8px 24px rgba(0,0,0,.22); }
   .chat-composer:focus-within {
     border-color: var(--accent);
-    background: var(--bg2);
-    box-shadow: 0 0 0 3px var(--accent-ring);
+    background: var(--surface-elevated);
+    box-shadow: 0 0 0 3px var(--accent-ring), 0 10px 28px rgba(15,23,42,.08);
   }
   .chat-composer .attach {
     width: 38px; height: 38px; flex-shrink: 0;
     border: none; border-radius: 50%;
     background: transparent; color: var(--muted2);
-    font-size: 22px; line-height: 1; cursor: pointer;
+    cursor: pointer;
     display: flex; align-items: center; justify-content: center;
     padding: 0; margin: 0; box-shadow: none;
+    transition: background .15s, color .15s;
   }
-  .chat-composer .attach:active { background: var(--hover); color: var(--accent); }
+  .chat-composer .attach:active { background: var(--accent-soft); color: var(--accent); }
   .chat-composer input[type="text"] {
     flex: 1; min-width: 0;
     border: none; background: transparent;
@@ -2131,24 +2306,21 @@ document.addEventListener('DOMContentLoaded', function init() {
     border: none; background: transparent; box-shadow: none;
   }
   .chat-composer .send-btn {
-    width: 38px; height: 38px; flex-shrink: 0;
+    width: 34px; height: 34px; flex-shrink: 0;
     border: none; border-radius: 50%;
-    padding: 0; margin: 0;
+    padding: 0; margin: 0 2px 0 0;
     background: var(--accent-grad); color: #fff;
-    font-size: 18px; font-weight: 700; line-height: 1;
     cursor: pointer;
     display: flex; align-items: center; justify-content: center;
-    box-shadow: 0 3px 10px var(--accent-shadow);
+    box-shadow: 0 6px 16px var(--accent-shadow), inset 0 1px 0 rgba(255,255,255,.24);
     letter-spacing: 0; text-transform: none;
-    transition: transform .1s, opacity .15s;
+    transition: transform .1s, opacity .15s, box-shadow .15s;
   }
   .chat-composer .send-btn:active { transform: scale(.94); }
   .chat-composer .send-btn:disabled {
-    background: var(--line2); color: var(--muted); box-shadow: none; opacity: .7;
+    background: var(--line2); color: var(--muted); box-shadow: none; opacity: .75;
   }
-  .chat-composer .send-btn .send-ico {
-    display: block; transform: translateY(-1px);
-  }
+  .chat-composer .send-btn .send-ico { display: block; }
   .statusline { max-width: 700px; margin: 0 auto; font-size: 12px; color: var(--muted2); padding: 4px 2px 0; }
 
   /* ── 会话列表首页（豆包式）── */
@@ -2195,13 +2367,27 @@ document.addEventListener('DOMContentLoaded', function init() {
 
   /* ── 我的 / 浏览器 ── */
   .panel { flex: 1; overflow-y: auto; padding: 16px; }
-  .box { background: var(--bg2); border-radius: 14px; padding: 15px; margin-bottom: 10px; box-shadow: var(--box-shadow); }
-  .box h3 { font-size: 15px; color: var(--text2); }
-  .muted { color: var(--muted); font-size: 12px; }
+  .box {
+    background: var(--surface-elevated); border: 1px solid var(--line2);
+    border-radius: 18px; padding: 16px; margin-bottom: 12px;
+    box-shadow: var(--box-shadow);
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  }
+  .box h3 { font-size: 15px; color: var(--text2); font-weight: 700; letter-spacing: .02em; }
+  .muted { color: var(--muted); font-size: 12px; line-height: 1.5; }
 
-  /* ── 我的：豆包风格头部卡片 ── */
-  .me-hero { text-align: center; padding: 30px 16px 24px; border-radius: 16px; margin-bottom: 12px; background: var(--me-hero); }
-  .me-avatar { width: 76px; height: 76px; border-radius: var(--avatar-radius); margin: 0 auto 12px; background: var(--accent-grad); color: #fff; font-size: 32px; font-weight: 700; display: flex; align-items: center; justify-content: center; box-shadow: 0 6px 16px var(--accent-shadow); }
+  /* ── 我的：头部卡片 ── */
+  .me-hero {
+    text-align: center; padding: 32px 16px 26px; border-radius: 20px; margin-bottom: 12px;
+    background: var(--me-hero); border: 1px solid var(--line2);
+    box-shadow: var(--box-shadow);
+  }
+  .me-avatar {
+    width: 80px; height: 80px; border-radius: var(--avatar-radius); margin: 0 auto 12px;
+    background: var(--accent-grad); color: #fff; font-size: 32px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 12px 28px var(--accent-shadow), inset 0 1px 0 rgba(255,255,255,.25);
+  }
   .lv-list .conv-avatar { border-radius: var(--avatar-radius); }
   .list-avatar { border-radius: var(--avatar-radius); }
   .me-name { font-size: 21px; font-weight: 800; color: var(--text2); }
@@ -2210,7 +2396,13 @@ document.addEventListener('DOMContentLoaded', function init() {
   /* ── 设置（标准清爽列表）── */
   .set-row { display: flex; align-items: center; gap: 12px; padding: 12px 2px; border-bottom: 1px solid var(--line); cursor: pointer; }
   .set-row:last-of-type { border-bottom: none; }
-  .set-ic { width: 34px; height: 34px; border-radius: var(--btn-radius); background: var(--accent-soft); color: var(--accent); font-size: 17px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .set-ic {
+    width: 36px; height: 36px; border-radius: 12px;
+    background: linear-gradient(145deg, var(--accent-soft), rgba(255,255,255,.35));
+    color: var(--accent); font-size: 17px;
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.4);
+  }
   .set-txt { flex: 1; min-width: 0; }
   .set-label { font-size: 15px; color: var(--text2); font-weight: 600; }
   .set-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
@@ -2221,8 +2413,9 @@ document.addEventListener('DOMContentLoaded', function init() {
   .set-sec { font-size: 12px; color: var(--muted); margin: 12px 2px 8px; letter-spacing: .3px; }
   .theme-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
   .theme-card {
-    border: 2px solid transparent; border-radius: 16px; overflow: hidden; cursor: pointer;
-    background: var(--hover); transition: border-color .15s, transform .1s;
+    border: 2px solid transparent; border-radius: 18px; overflow: hidden; cursor: pointer;
+    background: var(--hover); transition: border-color .15s, transform .1s, box-shadow .15s;
+    box-shadow: var(--box-shadow);
   }
   .theme-card:active { transform: scale(.97); }
   .theme-card.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-ring); }
@@ -2246,31 +2439,45 @@ document.addEventListener('DOMContentLoaded', function init() {
   /* ── 通用 ── */
   .btn {
     background: var(--btn-bg); color: var(--btn-fg); border: var(--btn-border); border-radius: var(--btn-radius);
-    padding: 11px 15px; font-size: 14px; font-weight: var(--btn-weight); letter-spacing: var(--btn-tracking);
+    padding: 12px 16px; font-size: 14px; font-weight: var(--btn-weight); letter-spacing: var(--btn-tracking);
     text-transform: var(--btn-transform); cursor: pointer; width: 100%; margin-top: 9px;
     transition: opacity .15s, transform .1s, box-shadow .15s; box-shadow: var(--btn-shadow);
   }
-  .btn:active { transform: scale(.98); }
-  .btn:disabled { background: var(--btn-disabled); box-shadow: none; }
+  .btn:active { transform: scale(.985); }
+  .btn:disabled { background: var(--btn-disabled); box-shadow: none; opacity: .85; }
   .btn.ghost { background: var(--ghost-bg); color: var(--ghost-fg); border: var(--ghost-border); box-shadow: var(--ghost-shadow); }
-  .btn.danger { background: var(--danger); color: #fff; border: none; box-shadow: 0 4px 12px rgba(239,68,68,.28); }
+  .btn.danger { background: linear-gradient(135deg, #f87171, #ef4444); color: #fff; border: none; box-shadow: 0 6px 18px rgba(239,68,68,.28); }
   .btn.muted, .btn.cancel { background: var(--hover); color: var(--muted2); border: 1px solid var(--line2); box-shadow: none; }
-  .btn.small { width: auto; padding: 7px 13px; font-size: 13px; margin-top: 0; }
-  input, textarea { width: 100%; padding: 11px; border-radius: var(--btn-radius); border: 1px solid var(--line2); font-size: 14px; margin-top: 6px; outline: none; background: var(--input-bg); color: var(--text); }
-  input:focus, textarea:focus { border-color: var(--accent); background: var(--bg2); }
-  .badge { display: inline-block; padding: 2px 9px; border-radius: 10px; font-size: 11px; background: var(--line); color: var(--muted2); }
+  .btn.small { width: auto; padding: 8px 14px; font-size: 13px; margin-top: 0; border-radius: var(--btn-radius-sm); }
+  input, textarea {
+    width: 100%; padding: 12px; border-radius: var(--btn-radius); border: 1px solid var(--line2);
+    font-size: 14px; margin-top: 6px; outline: none; background: var(--input-bg); color: var(--text);
+    box-shadow: inset 0 1px 2px rgba(15,23,42,.03);
+  }
+  input:focus, textarea:focus { border-color: var(--accent); background: var(--bg2); box-shadow: 0 0 0 3px var(--accent-ring); }
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 11px; background: var(--line3); color: var(--muted2); font-weight: 600; }
   .badge.done { background: #d8f3e3; color: #0f7a3d; } .badge.waiting { background: #ffe9c2; color: #9a5b00; }
   .badge.failed, .badge.cancelled { background: #fde3e3; color: #c0392b; } .badge.running { background: #fff3cd; color: #92600a; }
   .field-row { margin-top: 9px; }
   .field-row label { font-size: 12px; color: var(--muted2); }
+  .pf-tabs { display: flex; gap: 0; margin-bottom: 12px; border-bottom: 1px solid var(--line2); }
+  .pf-tab {
+    padding: 8px 18px; font-size: 14px; font-weight: 600; color: var(--muted);
+    background: none; border: none; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px;
+  }
+  .pf-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
   .empty { text-align: center; color: var(--muted); padding: 48px 0; font-size: 13px; }
   .empty b { display: block; font-size: 15px; color: var(--muted2); margin-bottom: 6px; }
 
   /* ── 弹层 ── */
-  .modal-bg { position: fixed; top: 0; right: 0; bottom: 0; left: 0; background: var(--modal-mask); display: none; align-items: center; justify-content: center; z-index: 30; }
+  .modal-bg { position: fixed; top: 0; right: 0; bottom: 0; left: 0; background: var(--modal-mask); display: none; align-items: center; justify-content: center; z-index: 30; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
   .modal-bg.show { display: flex; }
-  .modal { background: var(--bg2); border-radius: 20px; padding: 22px; width: 92%; max-width: 420px; max-height: 86vh; overflow-y: auto; box-shadow: 0 8px 40px rgba(15,23,42,.16); }
-  .modal h2 { font-size: 17px; margin-bottom: 6px; color: var(--text2); }
+  .modal {
+    background: var(--surface-elevated); border: 1px solid var(--glass-border);
+    border-radius: 22px; padding: 24px; width: 92%; max-width: 420px; max-height: 86vh; overflow-y: auto;
+    box-shadow: 0 24px 64px rgba(15,23,42,.18), inset 0 1px 0 rgba(255,255,255,.35);
+  }
+  .modal h2 { font-size: 18px; margin-bottom: 8px; color: var(--text2); font-weight: 700; letter-spacing: .02em; }
 
 
 
@@ -2281,9 +2488,9 @@ document.addEventListener('DOMContentLoaded', function init() {
   <!-- 右侧主区 -->
   <div class="main">
     <div class="topbar">
-      <button class="menu-btn" onclick="showView('list')" title="对话列表">☰</button>
-      <button class="menu-btn" onclick="showView('showcase')" title="才艺">✨</button>
-      <button class="menu-btn" id="backBtn" onclick="showView('chat')" style="display:none" title="返回对话">←</button>
+      <button class="menu-btn" onclick="showView('list')" title="对话列表" type="button"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h10"/></svg></button>
+      <button class="menu-btn" onclick="showView('showcase')" title="才艺" type="button"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.4 4.3L18 9l-4.6 1.5L12 15l-1.4-4.5L6 9l4.6-1.7L12 3z"/><path d="M19 14l.7 2.1L22 17l-2.3.6L19 20l-.7-2.3L16 17l2.3-.6L19 14z"/></svg></button>
+      <button class="menu-btn" id="backBtn" onclick="handleBack()" style="display:none" title="返回对话" type="button"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button>
       <div class="db-title">
         <div class="title" id="viewTitle">虾米</div>
         <div class="db-sub" id="viewSub">AI 生成可能有误 注意核实</div>
@@ -2311,17 +2518,21 @@ document.addEventListener('DOMContentLoaded', function init() {
     <div class="view active" id="chatView">
       <div class="chat-scroll" id="chatScroll">
         <div class="chat-inner" id="chatInner">
-          <div class="chat-welcome" id="chatWelcome"><div class="welcome-avatar" id="welcomeBot">🤖</div><h2>家里有人</h2><div class="welcome-sub" onclick="showView('showcase')"><span class="welcome-spark">✨</span>去才艺，看家里谁会</div></div>
+          <div class="chat-welcome" id="chatWelcome"><div class="welcome-avatar" id="welcomeBot">🤖</div><h2>随时候命</h2><div class="welcome-sub" onclick="showView('showcase')"><span class="welcome-spark">✨</span>逛逛才艺大厅</div></div>
         </div>
       </div>
       <div class="ask-options" id="askOptionsBar" style="display:none"></div>
+      <div class="plus-menu" id="plusMenu" style="display:none">
+        <button onclick="plusAction('file')">📁 选择文件</button>
+        <button onclick="plusAction('photo')">📷 拍照</button>
+      </div>
       <div class="chat-inputbar">
         <div class="chat-input-inner">
           <div class="chat-composer">
-            <button class="attach" onclick="try{if(window.AndroidBridge&&window.AndroidBridge.chooseFile)window.AndroidBridge.chooseFile()}catch(e){}" title="选择文件" type="button">＋</button>
-            <button class="attach" onclick="try{if(window.AndroidBridge&&window.AndroidBridge.takePhoto)window.AndroidBridge.takePhoto()}catch(e){}" title="拍照" type="button">📷</button>
+            <button class="attach" onclick="speechInput()" title="语音输入" type="button"><svg class="ico sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V7a3 3 0 0 0-6 0v4a3 3 0 0 0 3 3z"/><path d="M19 11a7 7 0 0 1-14 0M12 18v3"/></svg></button>
+            <button class="attach" onclick="togglePlusMenu()" title="更多" type="button"><svg class="ico sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
             <input type="text" id="msg" placeholder="说点什么…" onkeydown="if(event.key==='Enter')sendMsg()" oninput="syncSendBtn()" onfocus="try{if(window.AndroidBridge)window.AndroidBridge.showKeyboard()}catch(e){}">
-            <button id="sendBtn" class="send-btn" onclick="sendMsg()" type="button" title="发送" disabled><span class="send-ico">↑</span></button>
+            <button id="sendBtn" class="send-btn" onclick="sendMsg()" type="button" title="发送" disabled><svg class="ico sm send-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
           </div>
         </div>
       </div>

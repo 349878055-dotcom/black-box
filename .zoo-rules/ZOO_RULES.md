@@ -89,3 +89,13 @@ $ADB -s $DEV pull /sdcard/ui.xml /tmp/ui.xml
 - **必须** 能一句话说完就别写一段；能 3 点说完别写 10 点
 - **必须** 只回答当前问的那一件事，不要主动扯到别的话题、不要延伸无关内容
 - **自检**：写回复前问自己：这句删掉影不影响回答？能删就删；是不是在答非所问？是就停。
+
+## 9. LangGraph 为唯一基座铁律（用户铁令 2026-08-20）
+
+> 用户铁令：**对话编排以 LangGraph 为唯一基座，不自创第二套路子。**
+> 原生就有：StateGraph 状态机、interrupt 等人、Command(resume) 喂回、checkpointer 落盘——够用，别再造轮子。
+
+- **禁止** 自造对话编排器 / 第二套状态机 / 命令总线 / 自研「等用户输入」的 Future 机制——LangGraph 原生全部已有
+- **必须** 用户一句话进来先过引擎判定（`dialogue/resolve_reply` 等纯函数，零 LLM）→ 得出 SET_SLOT / REASK / ABANDON / OFF_TOPIC / NEW_INTENT，再决定怎么走；**执行权留在引擎，模型只负责表达**
+- **必须** 对话状态进 LangGraph state + checkpointer 落盘（thread_id = 会话 ID）；业务判定写成纯函数节点；约束放引擎，不进提示词
+- **自检**：要写「编排 / 状态机 / 等人回答 / 状态恢复」前，先问：LangGraph 原生有没有？有就拿来用，不新造。

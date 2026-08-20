@@ -63,6 +63,8 @@ class SessionExecutor:
                 from .bridge import bridge
 
                 self.email = email
+                # 把 email 记到会话上，供 bridge 在注册状态丢失时按 email 找回活跃连接
+                self.session.email = email
                 bridge.register(email, self._send_and_wait,
                                 self.send_skill_request, self.send_push)
 

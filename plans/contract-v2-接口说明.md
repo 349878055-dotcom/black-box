@@ -26,6 +26,7 @@
 | `contract/login.json` | 登录方案 + auth |
 | `contract/methods.json` | 方法数组（对话 AI 的菜单） |
 | `contract/payment.json` | 交付 / 支付 |
+| `contract/form.json` | **跨轮表单登记表（要收集客户信息的 skill 必带）**：登记需要 ask_user 问的 customer 字段，引擎把回答「填一个存一个」、下次自动补参、read_skill 告知已填/还缺 |
 | `api/*.py` | 实现：组蓝图、把平台原始数据变成统一返回 |
 | `register.py` | 挂载（复制样板，不写业务） |
 | `docs/` | 给人看的说明（建议写清登录与付款怎么测通） |
@@ -113,7 +114,7 @@
 | `need_login` | 要不要先登录 |
 | `confirm` | 真操作前是否先确认 |
 | `deliver` | 办完给客户哪种结果 |
-| `form` | 多字段表单（可选；引擎按会话填一个存一个） |
+| `form` | 跨轮表单登记表（`contract/form.json`，要收集客户信息的 skill 建议带；引擎按会话填一个存一个、自动补参、read_skill 告知已填/还缺，详见 3.1 F） |
 | `rules` | 本平台叮嘱（只给 AI 看，引擎不硬拦） |
 
 `flow` 已不再使用：现存契约不写，检索也不拼业务流程。真实 URL、签名、成功码 —— 对话 AI 不需要知道，写在 `api` 里。
@@ -181,7 +182,7 @@
 > 有些平台办一件事 = 填一张**多字段表单**（如海关申报、就诊人登记、购票乘车人信息）。
 > 这类 skill 在契约里**声明一个 `form` 字段表**即可，云端不为此加复杂机制。
 
-**声明方式（每个 skill 自己写自己的表单，放 `meta.json`）：**
+**声明方式（每个 skill 自己写自己的表单，放独立 `contract/form.json`）：**
 
 ```json
 "form": [
@@ -208,7 +209,16 @@
 
 资料卡字段（`source=profile`）只在手机填，**不写入云端表单状态**。
 
-新 skill 若是一张多字段表单，在 `meta.json` 声明 `form`；方法参数名与 `field` 对齐后，引擎会把已填值补进 `skill_run`。没有 `form` 的 skill 仍用 `customer_input` + `ask_user`。
+**要收集客户信息的 skill 建议都带 `contract/form.json`**（不只「多字段表单」）：
+
+> 只写 `customer_input` 不写 `form` → 系统记不住已填字段，跨轮/续跑时模型会反复问已给信息
+> （2026-08-20 实测：途牛反复问「出发城市」，根因就是没带 form）。
+> `form` 是「跨轮记忆登记本」：AI 问到的答案填一个存一个（挂在会话上）、下次自动补参、
+> `read_skill` 告知 AI「已填/还缺」，让 AI 只问还没填的。
+
+引擎已支持读 `form.json`（`store/archive_center/skill_archive/__init__.py` 的 `load_contract_parts`，
+2026-08-20 新增）。方法参数名与 `field` 对齐后，引擎会把已填值补进 `skill_run`。
+没有 `form` 的 skill 仍用 `customer_input` + `ask_user`。
 
 ---
 

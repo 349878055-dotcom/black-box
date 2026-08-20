@@ -29,4 +29,8 @@ def load_contract_parts(skill_dir: str) -> dict:
     login = _rd("login.json", {}) or {}
     methods = _rd("methods.json", {}) or {}
     payment = _rd("payment.json", {}) or {}
-    return {**meta, **login, **methods, **payment}
+    # form.json：跨轮表单记忆登记表（2026-08-20）——需要收集客户信息的 skill
+    # 都应带 form（customer 字段），让 ask_user 回答自动存进跨轮状态、下次自动补参，
+    # 避免跨轮/续跑时模型反复问已给信息（如途牛反复问「出发城市」）。
+    form = _rd("form.json", {}) or {}
+    return {**meta, **login, **methods, **payment, **form}

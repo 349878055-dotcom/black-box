@@ -11,6 +11,7 @@ requests>=2.31.0
 
 # ── Agent 调度（LangGraph ReAct；业务仍在 adapters / agent._run_tool）──
 langgraph>=1.0.0
+langgraph-checkpoint-sqlite>=2.0.0
 langchain-openai>=0.3.0
 langchain-core>=0.3.0
 

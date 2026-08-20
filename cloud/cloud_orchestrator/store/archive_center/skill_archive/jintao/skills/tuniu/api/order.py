@@ -300,4 +300,9 @@ class OrderMixin:
         j = await self._m_exec(self._m_blueprint("GET", url))
         if j.get("errorCode") == 710000:
             return {"ok": True, "orders": (j.get("data") or {}).get("orderList", []), "raw": j}
+        # 未登录/登录态失效（179998 或 msg 含登录信号）→ 标记 need_login，
+        # 供 browser 登录流程的 verify 校验判定「是否真的登录成功」（防假登录）
+        if j.get("errorCode") == 179998 or "登录" in str(j.get("msg") or ""):
+            return {"ok": False, "need_login": True,
+                    "error": j.get("msg") or "未登录，请先登录途牛", "raw": j}
         return {"ok": False, "error": j.get("msg") or str(j)[:200], "raw": j}
