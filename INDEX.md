@@ -30,7 +30,7 @@
 ├── cloud/                    云端
 ├── app/                      Android 手机端
 ├── docs/                     体检 / 归档文档
-├── tools/                    本地诊断脚本（不含部署密钥）
+├── tools/                    对话规则单测（_test_dialogue 等）
 ├── .zoo-rules/               开发铁令
 └── requirements.txt          云端 Python 依赖
 ```

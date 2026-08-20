@@ -345,8 +345,8 @@ personal-assistant/
 │   └── src/                        # 源码 + UI 资源
 │       ├── core/                   # Java 源码 + AndroidManifest.xml
 │       └── ui/                     # HTML/CSS/JS + drawable 资源
-├── tools/                          # 运维/测试脚本
-├── plans/                          # 设计文档、接口说明
+├── tools/                          # 对话规则单测
+├── plans/                          # 契约接口 + LangGraph 架构说明
 ├── docs/                           # 文档
 ├── requirements.txt                # 云端 Python 依赖
 ├── INDEX.md                        # 按问题找文件的索引
